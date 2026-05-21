@@ -37,8 +37,20 @@ def _a2a_url(agent_name: str) -> str:
 
 
 def _resolve_agent(model: str) -> str:
-    """Map an OpenAI model name to a kagent agent name."""
-    return settings.agent_map.get(model, settings.default_agent)
+    """Map an OpenAI model name to a kagent agent name.
+
+    Falls back to ``settings.default_agent`` for unknown models. Raises
+    ``ValueError`` if the model is not in ``agent_map`` and no default agent
+    is configured — callers should surface this as a 4xx to the client.
+    """
+    if (agent := settings.agent_map.get(model)) is not None:
+        return agent
+    if settings.default_agent is not None:
+        return settings.default_agent
+    raise ValueError(
+        f"Model {model!r} is not in PROXY_AGENT_MAP and PROXY_DEFAULT_AGENT "
+        f"is not set"
+    )
 
 
 def _format_message(message: dict) -> str:

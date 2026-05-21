@@ -108,9 +108,10 @@ async def chat_completions(request: Request) -> StreamingResponse | JSONResponse
                 "X-Accel-Buffering": "no",   # disable nginx buffering
             },
         )
-    else:
-        # Non-streaming: accumulate all chunks into one response
+    try:
         return await _blocking_response(req.model, messages, session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 async def _stream_response(
