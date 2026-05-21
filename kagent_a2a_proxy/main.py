@@ -54,8 +54,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="surf-a2a-proxy",
-    description="Translates OpenAI streaming chat completions and MCP tool calls to kagent A2A",
+    title="kagent-a2a-proxy",
+    description="OpenAI-compatible streaming chat completions and MCP server backed by kagent A2A",
     version="0.1.0",
     lifespan=lifespan,
 )

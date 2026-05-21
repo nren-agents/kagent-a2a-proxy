@@ -49,7 +49,7 @@ def _register_tool(mcp: FastMCP, model_key: str, agent_name: str) -> None:
 
 def build_mcp_server() -> FastMCP:
     """Construct a FastMCP server with one tool per entry in agent_map."""
-    mcp = FastMCP("surf-a2a-proxy")
+    mcp = FastMCP("kagent-a2a-proxy")
     for model_key, agent_name in settings.agent_map.items():
         _register_tool(mcp, model_key, agent_name)
     return mcp
