@@ -20,10 +20,8 @@ from conftest import artifact_event, completed_event, sse_response, working_even
 
 
 def _kagent_url(agent_name: str) -> str:
-    return (
-        f"{settings.kagent_base_url}/api/a2a"
-        f"/{settings.kagent_namespace}/{agent_name}"
-    )
+    base = str(settings.kagent_base_url).rstrip("/")
+    return f"{base}/api/a2a/{settings.kagent_namespace}/{agent_name}"
 
 
 # ---------------------------------------------------------------------------

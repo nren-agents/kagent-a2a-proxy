@@ -20,7 +20,7 @@ from conftest import artifact_event, completed_event, sse_response, working_even
 client = TestClient(app)
 
 KAGENT_URL = (
-    f"{settings.kagent_base_url}/api/a2a"
+    f"{str(settings.kagent_base_url).rstrip('/')}/api/a2a"
     f"/{settings.kagent_namespace}/agent-one"
 )
 

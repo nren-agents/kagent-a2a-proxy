@@ -32,10 +32,8 @@ async def aclose() -> None:
 
 
 def _a2a_url(agent_name: str) -> str:
-    return (
-        f"{settings.kagent_base_url}/api/a2a"
-        f"/{settings.kagent_namespace}/{agent_name}"
-    )
+    base = str(settings.kagent_base_url).rstrip("/")
+    return f"{base}/api/a2a/{settings.kagent_namespace}/{agent_name}"
 
 
 def _resolve_agent(model: str) -> str:
