@@ -101,7 +101,9 @@ shows how to wire the proxy as both an MCP server and a custom OpenAI endpoint.
 
 ```bash
 uv sync --all-groups
-uv run pytest -q
+uv run pytest -q                                       # tests
+uv run ruff check . && uv run ruff format --check .    # lint
+uv run mypy kagent_a2a_proxy                           # typecheck
 ```
 
 Tests cover the translator, the FastAPI surface (`/v1/chat/completions`,
