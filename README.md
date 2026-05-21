@@ -1,0 +1,113 @@
+# kagent-a2a-proxy
+
+OpenAI-compatible streaming chat completions and MCP Streamable HTTP server,
+backed by [kagent](https://kagent.dev) agents over the A2A protocol.
+
+Drop it in front of a kagent controller and your agents look like:
+
+- **OpenAI models** — every agent in `PROXY_AGENT_MAP` becomes a model on
+  `/v1/chat/completions` and `/v1/models`. Streaming SSE works; reasoning
+  output is routed to the `reasoning_content` channel so LibreChat renders
+  it in the "Thinking" pane.
+- **MCP tools** — every agent in `PROXY_AGENT_MAP` becomes an MCP tool on
+  `/mcp` (Streamable HTTP). Working/thinking deltas are forwarded as MCP
+  progress notifications.
+
+## How it works
+
+```
+client ──► /v1/chat/completions ─┐
+                                 │
+client ──► /mcp tool call ───────┤  proxy  ──► POST /api/a2a/<ns>/<agent>
+                                 │     │
+                                 │     └── translator: A2A status/artifact
+                                 │         events → OpenAI delta chunks
+                                 │
+                                 ▼
+                          kagent-controller
+```
+
+- An OpenAI request is translated into a kagent A2A `message/stream` call.
+  The agent's `working` events become `reasoning_content` deltas; the final
+  artifact text becomes regular `content`.
+- MCP tool calls go through the same A2A path. The tool returns the artifact
+  text; `working` text fires `Context.report_progress` notifications.
+
+## Quickstart
+
+### Docker
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e PROXY_KAGENT_BASE_URL=http://your-kagent-controller:8083 \
+  -e PROXY_KAGENT_NAMESPACE=default \
+  -e PROXY_AGENT_MAP='{"agent-one":"agent-one"}' \
+  ghcr.io/nren-agents/kagent-a2a-proxy:latest
+```
+
+### Local with uv
+
+```bash
+uv sync --all-groups
+cp .env.example .env       # then edit
+uv run uvicorn kagent_a2a_proxy.main:app --host 0.0.0.0 --port 8080
+```
+
+### Send a request
+
+```bash
+curl -N http://localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "agent-one",
+    "messages": [{"role":"user","content":"hello"}],
+    "stream": true
+  }'
+```
+
+## Configuration
+
+All settings are read from `PROXY_*` environment variables (or a local
+`.env` file). See `.env.example` for a copy-pasteable template.
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `PROXY_KAGENT_BASE_URL` | URL | `http://kagent-controller.kagent.svc:8083` | Base URL of the kagent-controller A2A server. |
+| `PROXY_KAGENT_NAMESPACE` | string | `default` | Kubernetes namespace where kagent agents are deployed. |
+| `PROXY_AGENT_MAP` | JSON object | `{}` | Map of OpenAI model name → kagent agent name. |
+| `PROXY_DEFAULT_AGENT` | string | _unset_ | Optional fallback for unknown models. Must appear as a value in `PROXY_AGENT_MAP`. |
+| `PROXY_REQUEST_TIMEOUT` | float (seconds) | `300` | Per-request timeout for kagent A2A calls. |
+| `PROXY_LOG_LEVEL` | `debug`/`info`/`warning`/`error`/`critical` | `info` | Log level for the proxy's logger. |
+
+`PROXY_AGENT_MAP` is parsed as JSON. Example:
+
+```bash
+PROXY_AGENT_MAP='{"weather":"weather-agent","alerts":"alerting-agent"}'
+```
+
+Misconfiguration fails fast at startup: invalid URLs, unknown log levels,
+non-positive timeouts, and `PROXY_DEFAULT_AGENT` values that don't appear in
+the map all raise a `ValidationError`.
+
+## Deployment
+
+See [`examples/deploy.yaml`](examples/deploy.yaml) for a minimal Kubernetes
+manifest (Deployment + Service + commented `RemoteMCPServer`).
+
+LibreChat users: [`examples/librechat-config.yaml`](examples/librechat-config.yaml)
+shows how to wire the proxy as both an MCP server and a custom OpenAI endpoint.
+
+## Development
+
+```bash
+uv sync --all-groups
+uv run pytest -q
+```
+
+Tests cover the translator, the FastAPI surface (`/v1/chat/completions`,
+`/v1/models`, `/healthz/ready`), the MCP tool surface, the Settings
+validators, and the model→agent resolver.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
