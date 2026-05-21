@@ -11,8 +11,8 @@ import respx
 import httpx
 from fastapi.testclient import TestClient
 
-from surf_a2a_proxy.main import app
-from surf_a2a_proxy.config import settings
+from kagent_a2a_proxy.main import app
+from kagent_a2a_proxy.config import settings
 
 from conftest import artifact_event, completed_event, sse_response, working_event
 

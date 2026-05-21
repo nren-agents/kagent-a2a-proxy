@@ -13,8 +13,8 @@ import pytest
 import respx
 from fastmcp import Client
 
-from surf_a2a_proxy.config import settings
-from surf_a2a_proxy.mcp_server import _sanitise_tool_name, mcp
+from kagent_a2a_proxy.config import settings
+from kagent_a2a_proxy.mcp_server import _sanitise_tool_name, mcp
 
 from conftest import artifact_event, completed_event, sse_response, working_event
 
