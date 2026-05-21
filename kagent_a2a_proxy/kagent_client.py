@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -53,14 +54,14 @@ def _resolve_agent(model: str) -> str:
     )
 
 
-def _format_message(message: dict) -> str:
+def _format_message(message: dict[str, Any]) -> str:
     role = message.get("role", "user")
     content = message.get("content") or ""
     prefix = f"[{role}] " if role != "user" else ""
     return f"{prefix}{content}"
 
 
-def _build_payload(messages: list[dict], session_id: str) -> dict:
+def _build_payload(messages: list[dict[str, Any]], session_id: str) -> dict[str, Any]:
     """
     Build an A2A message/stream JSON-RPC payload from OpenAI messages.
 
@@ -89,7 +90,7 @@ def _build_payload(messages: list[dict], session_id: str) -> dict:
 
 async def stream_agent(
     model: str,
-    messages: list[dict],
+    messages: list[dict[str, Any]],
     session_id: str | None = None,
 ) -> AsyncIterator[str]:
     """

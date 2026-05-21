@@ -12,9 +12,11 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
+from typing import Any
 
 from .models import (
     A2ADataPart,
+    A2AMessage,
     A2ATaskArtifactUpdateEvent,
     A2ATaskStatusUpdateEvent,
     ChatCompletionChunk,
@@ -25,7 +27,7 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
-def parse_sse_line(line: str) -> dict | None:
+def parse_sse_line(line: str) -> dict[str, Any] | None:
     """
     Parse a single SSE data line into an A2A event dict.
 
@@ -54,11 +56,11 @@ def parse_sse_line(line: str) -> dict | None:
             logger.warning("kagent JSON-RPC error: %s", error)
             return None
         case _:
-            return parsed
+            return parsed  # type: ignore[no-any-return]  # json.loads returns Any
 
 
 def event_to_chunks(
-    raw: dict,
+    raw: dict[str, Any],
     model: str,
 ) -> Iterator[ChatCompletionChunk]:
     """
@@ -132,7 +134,7 @@ def event_to_chunks(
     # All other states (submitted, cancelled, failed) — no output
 
 
-def _approval_hint(message) -> str:
+def _approval_hint(message: A2AMessage | None) -> str:
     """Extract the toolConfirmation hint string from a long-running tool message."""
     if not message:
         return ""
@@ -147,7 +149,7 @@ def _approval_hint(message) -> str:
 
 
 def _artifact_update_chunks(
-    raw: dict,
+    raw: dict[str, Any],
     model: str,
 ) -> Iterator[ChatCompletionChunk]:
     """Emit the artifact text content as a delta chunk."""

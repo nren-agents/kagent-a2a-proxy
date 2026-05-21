@@ -14,6 +14,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -46,7 +47,7 @@ _mcp_app = mcp.http_app(path="/")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with _mcp_app.lifespan(app):
         try:
             yield
@@ -73,7 +74,7 @@ app.mount("/mcp", _mcp_app)
 
 
 @app.get("/healthz/ready", include_in_schema=False)
-async def healthz() -> dict:
+async def healthz() -> dict[str, Any]:
     return {"status": "ok"}
 
 
@@ -121,7 +122,7 @@ async def chat_completions(request: Request) -> StreamingResponse | JSONResponse
 
 async def _stream_response(
     model: str,
-    messages: list[dict],
+    messages: list[dict[str, Any]],
     session_id: str,
 ) -> AsyncIterator[str]:
     """Yield SSE chunks for a streaming chat completions response."""
@@ -166,7 +167,7 @@ def _error_chunk(model: str, message: str) -> ChatCompletionChunk:
 
 async def _blocking_response(
     model: str,
-    messages: list[dict],
+    messages: list[dict[str, Any]],
     session_id: str,
 ) -> JSONResponse:
     """Accumulate the full stream and return a non-streaming response."""

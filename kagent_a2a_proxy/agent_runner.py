@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from itertools import chain
+from typing import Any
 
 from .kagent_client import stream_agent
 from .models import DeltaContent
@@ -26,14 +27,14 @@ ProgressCallback = Callable[[str], Awaitable[None]]
 
 async def _events(
     line_stream: AsyncIterator[str],
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[dict[str, Any]]:
     """Yield parsed A2A event dicts from a raw SSE line stream."""
     async for raw in line_stream:
         if (event := parse_sse_line(raw)) is not None:
             yield event
 
 
-def _iter_deltas(event: dict, model: str) -> Iterator[DeltaContent]:
+def _iter_deltas(event: dict[str, Any], model: str) -> Iterator[DeltaContent]:
     """Flatten one A2A event into the delta objects across all chunks/choices."""
     return chain.from_iterable(
         (choice.delta for choice in chunk.choices)
@@ -43,7 +44,7 @@ def _iter_deltas(event: dict, model: str) -> Iterator[DeltaContent]:
 
 async def collect_agent_response(
     model: str,
-    messages: list[dict],
+    messages: list[dict[str, Any]],
     session_id: str,
     on_progress: ProgressCallback | None = None,
 ) -> str:

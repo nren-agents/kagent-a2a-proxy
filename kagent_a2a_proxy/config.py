@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     )
 
     kagent_base_url: AnyHttpUrl = Field(
-        default="http://kagent-controller.kagent.svc:8083",
+        default=AnyHttpUrl("http://kagent-controller.kagent.svc:8083"),
         description="Base URL of the kagent-controller A2A server.",
     )
     kagent_namespace: str = Field(
