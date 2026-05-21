@@ -61,7 +61,7 @@ app = FastAPI(
         "OpenAI-compatible streaming chat completions and MCP server"
         " backed by kagent A2A"
     ),
-    version="0.1.0",
+    version="0.0.2",
     lifespan=lifespan,
 )
 
