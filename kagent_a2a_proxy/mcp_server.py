@@ -6,6 +6,7 @@ corresponding kagent agent via A2A (reusing agent_runner) and returns the
 agent's final answer text. Working/thinking deltas are forwarded to the MCP
 client as progress notifications.
 """
+
 from __future__ import annotations
 
 import itertools

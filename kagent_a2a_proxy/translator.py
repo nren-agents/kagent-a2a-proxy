@@ -6,17 +6,17 @@ kagent event stream looks like:
   data: {"id":"...","status":{"state":"working"},"metadata":{"kagent_type":"function_call",...}}
   data: {"id":"...","status":{"state":"completed","message":{"role":"assistant","parts":[{"kind":"text","text":"final answer"}]}}}
 """
+
 from __future__ import annotations
 
 import json
 import logging
-from typing import Iterator
+from collections.abc import Iterator
 
 from .models import (
+    A2ADataPart,
     A2ATaskArtifactUpdateEvent,
     A2ATaskStatusUpdateEvent,
-    A2ATextPart,
-    A2ADataPart,
     ChatCompletionChunk,
     DeltaContent,
     StreamChoice,

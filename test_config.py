@@ -4,6 +4,7 @@ Tests for ``Settings`` — the pydantic-settings model that parses env vars.
 We construct ``Settings`` explicitly with kwargs (not via env) so each test
 exercises the field validators in isolation.
 """
+
 from __future__ import annotations
 
 import pytest

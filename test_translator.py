@@ -9,13 +9,15 @@ kagent's A2A stream uses the pre-v1.0 protocol shape:
     (the visible assistant reply); completed status-updates emit finish_reason
     only — the artifact carries the actual answer.
 """
-import pytest
-from kagent_a2a_proxy.translator import event_to_chunks, parse_sse_line
 
+import pytest
+
+from kagent_a2a_proxy.translator import event_to_chunks, parse_sse_line
 
 # ---------------------------------------------------------------------------
 # parse_sse_line — JSON-RPC envelope unwrapping
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "line,expected",
@@ -42,6 +44,7 @@ def test_parse_sse_line(line: str, expected):
 # ---------------------------------------------------------------------------
 # event_to_chunks — status-update (thinking channel)
 # ---------------------------------------------------------------------------
+
 
 def test_working_text_goes_to_reasoning_content():
     event = {
@@ -70,7 +73,9 @@ def test_tool_call_annotation_goes_to_reasoning_content():
             "state": "working",
             "message": {
                 "role": "assistant",
-                "parts": [{"kind": "data", "data": {"name": "influxdb_query", "args": {}}}],
+                "parts": [
+                    {"kind": "data", "data": {"name": "influxdb_query", "args": {}}}
+                ],
             },
         },
         "metadata": {"kagent_type": "function_call", "kagent_is_long_running": False},
@@ -89,20 +94,22 @@ def test_hitl_approval_request_goes_to_reasoning_content():
             "state": "input-required",
             "message": {
                 "role": "assistant",
-                "parts": [{
-                    "kind": "data",
-                    "data": {
-                        "name": "adk_request_confirmation",
-                        "id": "conf-1",
-                        "args": {
-                            "originalFunctionCall": {"name": "restart_router"},
-                            "toolConfirmation": {
-                                "hint": "Restart router spine-01?",
-                                "confirmed": False,
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "name": "adk_request_confirmation",
+                            "id": "conf-1",
+                            "args": {
+                                "originalFunctionCall": {"name": "restart_router"},
+                                "toolConfirmation": {
+                                    "hint": "Restart router spine-01?",
+                                    "confirmed": False,
+                                },
                             },
                         },
-                    },
-                }],
+                    }
+                ],
             },
         },
         "metadata": {"kagent_type": "function_call", "kagent_is_long_running": True},
@@ -117,6 +124,7 @@ def test_hitl_approval_request_goes_to_reasoning_content():
 # ---------------------------------------------------------------------------
 # event_to_chunks — completed status-update emits only finish_reason
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "event",
@@ -153,6 +161,7 @@ def test_completed_event_emits_only_finish_chunk(event: dict):
 # event_to_chunks — artifact-update carries the actual answer text
 # ---------------------------------------------------------------------------
 
+
 def test_artifact_update_text_goes_to_content():
     event = {
         "kind": "artifact-update",
@@ -174,6 +183,7 @@ def test_artifact_update_text_goes_to_content():
 # ---------------------------------------------------------------------------
 # event_to_chunks — malformed events produce no chunks
 # ---------------------------------------------------------------------------
+
 
 def test_malformed_event_produces_no_chunks():
     chunks = list(event_to_chunks({"garbage": True}, "agent-one"))

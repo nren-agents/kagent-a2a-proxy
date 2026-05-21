@@ -3,17 +3,19 @@ Pydantic models for:
   - OpenAI chat completions request / streaming response
   - kagent A2A event stream
 """
+
 from __future__ import annotations
 
-from typing import Any, Literal
-from pydantic import BaseModel, Field
 import time
 import uuid
+from typing import Any, Literal
 
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # OpenAI request types
 # ---------------------------------------------------------------------------
+
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
@@ -33,6 +35,7 @@ class ChatCompletionRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # OpenAI streaming delta types
 # ---------------------------------------------------------------------------
+
 
 class DeltaContent(BaseModel):
     role: str | None = None
@@ -63,6 +66,7 @@ class ChatCompletionChunk(BaseModel):
 # OpenAI models list response
 # ---------------------------------------------------------------------------
 
+
 class ModelObject(BaseModel):
     id: str
     object: str = "model"
@@ -78,6 +82,7 @@ class ModelList(BaseModel):
 # ---------------------------------------------------------------------------
 # kagent A2A event types (subset we care about)
 # ---------------------------------------------------------------------------
+
 
 class A2ATextPart(BaseModel):
     kind: Literal["text"]
@@ -97,9 +102,7 @@ class A2AMessage(BaseModel):
     parts: list[A2ATextPart | A2ADataPart] = []
 
     def text(self) -> str:
-        return " ".join(
-            p.text for p in self.parts if isinstance(p, A2ATextPart)
-        )
+        return " ".join(p.text for p in self.parts if isinstance(p, A2ATextPart))
 
 
 class A2ATaskStatus(BaseModel):
@@ -109,6 +112,7 @@ class A2ATaskStatus(BaseModel):
 
 class A2ATaskStatusUpdateEvent(BaseModel):
     """Wraps a TaskStatusUpdateEvent from the A2A stream."""
+
     id: str = ""
     status: A2ATaskStatus
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -138,13 +142,12 @@ class A2AArtifact(BaseModel):
     parts: list[A2ATextPart | A2ADataPart] = []
 
     def text(self) -> str:
-        return "".join(
-            p.text for p in self.parts if isinstance(p, A2ATextPart)
-        )
+        return "".join(p.text for p in self.parts if isinstance(p, A2ATextPart))
 
 
 class A2ATaskArtifactUpdateEvent(BaseModel):
     """Wraps a TaskArtifactUpdateEvent from the A2A stream."""
+
     kind: Literal["artifact-update"]
     artifact: A2AArtifact
     lastChunk: bool = False

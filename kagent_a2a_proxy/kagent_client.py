@@ -6,10 +6,11 @@ kagent A2A URL pattern:
   method: message/stream  → SSE response
   method: message/send    → JSON response (non-streaming)
 """
+
 from __future__ import annotations
 
-import uuid
 import logging
+import uuid
 from collections.abc import AsyncIterator
 
 import httpx
@@ -48,8 +49,7 @@ def _resolve_agent(model: str) -> str:
     if settings.default_agent is not None:
         return settings.default_agent
     raise ValueError(
-        f"Model {model!r} is not in PROXY_AGENT_MAP and PROXY_DEFAULT_AGENT "
-        f"is not set"
+        f"Model {model!r} is not in PROXY_AGENT_MAP and PROXY_DEFAULT_AGENT is not set"
     )
 
 
@@ -105,7 +105,9 @@ async def stream_agent(
 
     logger.info(
         "Streaming agent=%s session=%s url=%s",
-        agent_name, sid, url,
+        agent_name,
+        sid,
+        url,
     )
 
     async with _client.stream(

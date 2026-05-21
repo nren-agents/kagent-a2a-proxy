@@ -7,6 +7,7 @@ and PROXY_DEFAULT_AGENT="agent-one", so:
   - unknown model → the configured default
   - unknown model with default cleared → raises ValueError
 """
+
 from __future__ import annotations
 
 import pytest

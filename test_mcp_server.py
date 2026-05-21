@@ -4,6 +4,7 @@ Tests for the MCP server surface exposed at /mcp.
 Uses FastMCP's in-memory Client transport (no HTTP roundtrip) and respx to
 mock the underlying kagent A2A calls.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,10 +14,9 @@ import pytest
 import respx
 from fastmcp import Client
 
+from conftest import artifact_event, completed_event, sse_response, working_event
 from kagent_a2a_proxy.config import settings
 from kagent_a2a_proxy.mcp_server import _sanitise_tool_name, mcp
-
-from conftest import artifact_event, completed_event, sse_response, working_event
 
 
 def _kagent_url(agent_name: str) -> str:
@@ -27,6 +27,7 @@ def _kagent_url(agent_name: str) -> str:
 # ---------------------------------------------------------------------------
 # Tool discovery
 # ---------------------------------------------------------------------------
+
 
 async def test_tools_list_matches_agent_map():
     async with Client(mcp) as client:
@@ -51,6 +52,7 @@ def test_tool_name_sanitisation(agent_key: str, expected_tool_name: str):
 # ---------------------------------------------------------------------------
 # Tool invocation
 # ---------------------------------------------------------------------------
+
 
 @respx.mock
 async def test_tool_invocation_returns_artifact_text():
@@ -120,6 +122,7 @@ async def test_tool_invocation_with_default_session_id_is_fresh_uuid():
 # ---------------------------------------------------------------------------
 # Error path
 # ---------------------------------------------------------------------------
+
 
 @respx.mock
 async def test_kagent_error_surfaces_as_mcp_tool_error():

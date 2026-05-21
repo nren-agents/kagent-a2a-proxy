@@ -11,6 +11,7 @@ artifact content. Optional `on_progress` callback fires for each reasoning
 (thinking/working) delta so MCP tools can forward them as progress
 notifications.
 """
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
@@ -19,7 +20,6 @@ from itertools import chain
 from .kagent_client import stream_agent
 from .models import DeltaContent
 from .translator import event_to_chunks, parse_sse_line
-
 
 ProgressCallback = Callable[[str], Awaitable[None]]
 

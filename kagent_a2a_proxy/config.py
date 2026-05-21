@@ -3,6 +3,7 @@ Runtime configuration loaded from PROXY_* environment variables (and from a
 local .env file when present). All fields have validators so misconfiguration
 fails fast at startup rather than at first request.
 """
+
 from __future__ import annotations
 
 from typing import Literal
@@ -52,7 +53,7 @@ class Settings(BaseSettings):
     )
 
     @model_validator(mode="after")
-    def _default_agent_in_map(self) -> "Settings":
+    def _default_agent_in_map(self) -> Settings:
         if self.default_agent and self.default_agent not in self.agent_map.values():
             raise ValueError(
                 f"default_agent {self.default_agent!r} must appear as a value "

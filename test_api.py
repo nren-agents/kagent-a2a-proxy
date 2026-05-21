@@ -6,16 +6,14 @@ kagent events are wrapped in a JSON-RPC envelope and use the pre-v1.0
 `kind` discriminator. The final assistant text arrives as an artifact-update,
 not as a completed status-update message.
 """
-import pytest
-import respx
+
 import httpx
+import respx
 from fastapi.testclient import TestClient
 
-from kagent_a2a_proxy.main import app
-from kagent_a2a_proxy.config import settings
-
 from conftest import artifact_event, completed_event, sse_response, working_event
-
+from kagent_a2a_proxy.config import settings
+from kagent_a2a_proxy.main import app
 
 client = TestClient(app)
 
@@ -29,6 +27,7 @@ KAGENT_URL = (
 # /healthz/ready
 # ---------------------------------------------------------------------------
 
+
 def test_healthz():
     r = client.get("/healthz/ready")
     assert r.status_code == 200
@@ -38,6 +37,7 @@ def test_healthz():
 # ---------------------------------------------------------------------------
 # /v1/models
 # ---------------------------------------------------------------------------
+
 
 def test_list_models():
     r = client.get("/v1/models")
@@ -51,6 +51,7 @@ def test_list_models():
 # ---------------------------------------------------------------------------
 # /v1/chat/completions — non-streaming returns artifact text
 # ---------------------------------------------------------------------------
+
 
 @respx.mock
 def test_non_streaming_completion():
@@ -67,11 +68,14 @@ def test_non_streaming_completion():
         )
     )
 
-    r = client.post("/v1/chat/completions", json={
-        "model": "agent-one",
-        "messages": [{"role": "user", "content": "Check interface ae-0/0/1"}],
-        "stream": False,
-    })
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [{"role": "user", "content": "Check interface ae-0/0/1"}],
+            "stream": False,
+        },
+    )
 
     assert r.status_code == 200
     body = r.json()
@@ -84,6 +88,7 @@ def test_non_streaming_completion():
 # ---------------------------------------------------------------------------
 # /v1/chat/completions — streaming
 # ---------------------------------------------------------------------------
+
 
 @respx.mock
 def test_streaming_completion():
@@ -100,11 +105,15 @@ def test_streaming_completion():
         )
     )
 
-    with client.stream("POST", "/v1/chat/completions", json={
-        "model": "agent-one",
-        "messages": [{"role": "user", "content": "hello"}],
-        "stream": True,
-    }) as r:
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    ) as r:
         assert r.status_code == 200
         lines = [line for line in r.iter_lines() if line.startswith("data:")]
 
@@ -122,17 +131,22 @@ def test_streaming_completion():
 # /v1/chat/completions — kagent 503 error
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 def test_kagent_error_surfaced_in_stream():
     respx.post(KAGENT_URL).mock(
         return_value=httpx.Response(503, content=b"unavailable")
     )
 
-    with client.stream("POST", "/v1/chat/completions", json={
-        "model": "agent-one",
-        "messages": [{"role": "user", "content": "hello"}],
-        "stream": True,
-    }) as r:
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    ) as r:
         assert r.status_code == 200
         lines = "".join(r.iter_lines())
 

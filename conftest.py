@@ -9,6 +9,7 @@ kagent's A2A stream uses the pre-v1.0 protocol shape and wraps each event in
 a JSON-RPC 2.0 envelope. The helpers below produce realistic event dicts and
 SSE bytes so test files don't each reinvent them.
 """
+
 from __future__ import annotations
 
 import json

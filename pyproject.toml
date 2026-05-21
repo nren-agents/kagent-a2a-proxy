@@ -40,8 +40,9 @@ line-length = 88
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-"test_*.py" = ["E501"]
+"test_*.py" = ["E501", "B017"]
 "conftest.py" = ["E501"]
+"kagent_a2a_proxy/translator.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
