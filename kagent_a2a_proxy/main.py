@@ -1,5 +1,5 @@
 """
-surf-a2a-proxy — FastAPI application.
+kagent-a2a-proxy — FastAPI application.
 
 Exposes:
   POST /v1/chat/completions   OpenAI streaming chat completions
