@@ -55,7 +55,7 @@ def test_working_text_goes_to_reasoning_content():
         },
         "metadata": {},
     }
-    chunks = list(event_to_chunks(event, "troubleshoot-planner"))
+    chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     delta = chunks[0].choices[0].delta
     assert delta.reasoning_content == "Checking telemetry..."
@@ -75,7 +75,7 @@ def test_tool_call_annotation_goes_to_reasoning_content():
         },
         "metadata": {"kagent_type": "function_call", "kagent_is_long_running": False},
     }
-    chunks = list(event_to_chunks(event, "telemetry-agent"))
+    chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     reasoning = chunks[0].choices[0].delta.reasoning_content
     assert "influxdb_query" in reasoning
@@ -107,7 +107,7 @@ def test_hitl_approval_request_goes_to_reasoning_content():
         },
         "metadata": {"kagent_type": "function_call", "kagent_is_long_running": True},
     }
-    chunks = list(event_to_chunks(event, "troubleshoot-planner"))
+    chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     reasoning = chunks[0].choices[0].delta.reasoning_content
     assert "⚠️" in reasoning
@@ -142,7 +142,7 @@ def test_hitl_approval_request_goes_to_reasoning_content():
     ],
 )
 def test_completed_event_emits_only_finish_chunk(event: dict):
-    chunks = list(event_to_chunks(event, "troubleshoot-planner"))
+    chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     assert chunks[0].choices[0].finish_reason == "stop"
     # The artifact carries the answer; completed status-updates do not.
@@ -164,7 +164,7 @@ def test_artifact_update_text_goes_to_content():
         "taskId": "t-1",
         "contextId": "c-1",
     }
-    chunks = list(event_to_chunks(event, "troubleshoot-planner"))
+    chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     delta = chunks[0].choices[0].delta
     assert delta.content == "Here is the final answer."
@@ -176,5 +176,5 @@ def test_artifact_update_text_goes_to_content():
 # ---------------------------------------------------------------------------
 
 def test_malformed_event_produces_no_chunks():
-    chunks = list(event_to_chunks({"garbage": True}, "troubleshoot-planner"))
+    chunks = list(event_to_chunks({"garbage": True}, "agent-one"))
     assert chunks == []
