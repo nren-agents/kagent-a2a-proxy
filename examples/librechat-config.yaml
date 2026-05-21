@@ -1,0 +1,60 @@
+# examples/librechat-config.yaml
+#
+# Example LibreChat configuration that consumes kagent-a2a-proxy as:
+#   (a) MCP server  — surfaces each kagent agent as an MCP tool, and
+#   (b) Custom OpenAI endpoint — surfaces each kagent agent as a "model".
+#
+# Replace the placeholders below before applying:
+#   <your-proxy-url>   URL where kagent-a2a-proxy is reachable from LibreChat
+#                      (e.g. http://kagent-a2a-proxy.<ns>.svc:8080)
+#   <your-mcp-token>   bearer token your proxy/gateway expects on /mcp
+#                      (omit the Authorization header if auth is not enforced)
+#   <agent-1>, <agent-2>   kagent agent names exposed via PROXY_AGENT_MAP
+#
+# Secrets to provide via env or LibreChat-credentials Secret:
+#   MCP_TOKEN            — bearer token for the proxy's /mcp surface
+#   PROXY_API_KEY        — optional; only if you've put an auth proxy in front
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: librechat-config
+  namespace: librechat
+data:
+  librechat.yaml: |
+    version: 1.3.5
+    cache: true
+
+    # mcpSettings must be top-level alongside mcpServers.
+    # allowedDomains whitelists in-cluster addresses — LibreChat blocks
+    # internal addresses by default as SSRF protection.
+    mcpSettings:
+      allowedDomains:
+        - "<your-proxy-url>"
+
+    # mcpServers is top-level — NOT nested under endpoints.
+    mcpServers:
+      kagent-agents:
+        type: streamable-http
+        url: "<your-proxy-url>/mcp"
+        timeout: 300000      # 5 minutes per tool call (ms)
+        initTimeout: 30000   # 30s for initialize handshake
+        headers:
+          Authorization: "Bearer ${MCP_TOKEN}"
+
+    endpoints:
+      # Custom OpenAI endpoint exposing kagent agents as "models".
+      custom:
+        - name: "kagent Agents"
+          apiKey: "${PROXY_API_KEY}"
+          baseURL: "<your-proxy-url>/v1"
+          models:
+            default:
+              - "<agent-1>"
+              - "<agent-2>"
+            fetch: false
+          titleConvo: true
+          titleModel: "<agent-1>"
+          modelDisplayLabel: "kagent Agents"
+          streamRate: 0
