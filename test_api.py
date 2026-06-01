@@ -152,3 +152,38 @@ def test_kagent_error_surfaced_in_stream():
 
     assert "Error" in lines or "503" in lines
     assert "[DONE]" in lines
+
+
+# ---------------------------------------------------------------------------
+# /v1/chat/completions — SSE read timeout disabled
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_streaming_disables_read_timeout():
+    # kagent can go silent for a long time between SSE events (long-running
+    # tools, human-in-the-loop approval); a read timeout would kill the stream.
+    route = respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response([artifact_event("ok"), completed_event()]),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    ) as r:
+        list(r.iter_lines())
+
+    timeout = route.calls.last.request.extensions["timeout"]
+    assert timeout["read"] is None
+    assert timeout["connect"] == settings.request_timeout
+    assert timeout["write"] == settings.request_timeout
+    assert timeout["pool"] == settings.request_timeout

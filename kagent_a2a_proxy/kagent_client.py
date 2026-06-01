@@ -119,6 +119,11 @@ async def stream_agent(
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         },
+        # read=None: kagent may be silent between SSE events for a long time
+        # (long-running tools, human-in-the-loop approval). The read timeout is
+        # the gap *between* reads, not a total budget, so any value would kill a
+        # healthy idle stream. connect/write/pool stay bounded.
+        timeout=httpx.Timeout(settings.request_timeout, read=None),
     ) as response:
         if response.status_code != 200:
             body = await response.aread()
