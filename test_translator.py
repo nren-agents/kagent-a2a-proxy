@@ -214,6 +214,42 @@ def test_free_text_input_required_goes_to_content():
     assert "❓" in delta.content
 
 
+def test_approval_embeds_signed_marker_when_secret_set(monkeypatch):
+    from kagent_a2a_proxy import hitl
+    from kagent_a2a_proxy.config import settings
+
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    event = {
+        "kind": "status-update",
+        "taskId": "t-9",
+        "contextId": "c-9",
+        "status": {
+            "state": "input-required",
+            "message": {
+                "role": "agent",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "name": "adk_request_confirmation",
+                            "args": {
+                                "originalFunctionCall": {"name": "restart_router"},
+                                "toolConfirmation": {"hint": "Restart spine-01?"},
+                            },
+                        },
+                    }
+                ],
+            },
+        },
+        "metadata": {"kagent_type": "function_call", "kagent_is_long_running": True},
+    }
+    chunk = next(iter(event_to_chunks(event, "agent-one")))
+    content = chunk.choices[0].delta.content
+    assert "approve" in content  # the visible reply instruction
+    # The exact signed marker for this (task, context) must be embedded.
+    assert hitl.encode_marker("t-9", "c-9", "s3cr3t").strip() in content
+
+
 # ---------------------------------------------------------------------------
 # event_to_chunks — completed status-update emits only finish_reason
 # ---------------------------------------------------------------------------

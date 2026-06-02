@@ -134,6 +134,8 @@ class A2ATaskStatusUpdateEvent(BaseModel):
 
     id: str = ""
     final: bool = False
+    taskId: str = ""
+    contextId: str = ""
     status: A2ATaskStatus
     metadata: dict[str, Any] = Field(default_factory=dict)
 

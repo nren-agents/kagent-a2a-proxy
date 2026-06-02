@@ -78,6 +78,7 @@ All settings are read from `PROXY_*` environment variables (or a local
 | `PROXY_DEFAULT_AGENT` | string | _unset_ | Optional fallback for unknown models. Must appear as a value in `PROXY_AGENT_MAP`. |
 | `PROXY_REQUEST_TIMEOUT` | float (seconds) | `300` | Per-request timeout for kagent A2A calls. |
 | `PROXY_LOG_LEVEL` | `debug`/`info`/`warning`/`error`/`critical` | `info` | Log level for the proxy's logger. |
+| `PROXY_HITL_SECRET` | string | _unset_ | Secret for HMAC-signing the human-in-the-loop approval marker. When set, tool-approval prompts become actionable (reply `approve`/`deny`); when unset, they are informational only. Use the same value on every replica. |
 
 `PROXY_AGENT_MAP` is parsed as JSON. Example:
 
@@ -88,6 +89,18 @@ PROXY_AGENT_MAP='{"weather":"weather-agent","alerts":"alerting-agent"}'
 Misconfiguration fails fast at startup: invalid URLs, unknown log levels,
 non-positive timeouts, and `PROXY_DEFAULT_AGENT` values that don't appear in
 the map all raise a `ValidationError`.
+
+### Human-in-the-loop approvals
+
+When a kagent agent calls a long-running tool that needs confirmation, the proxy
+surfaces a `⚠️ Approval required …` line in the reply. Set `PROXY_HITL_SECRET`
+(any random string, e.g. `openssl rand -hex 32`) to make these **actionable**:
+the proxy embeds an HMAC-signed, render-invisible marker in the reply, and when
+the user answers `approve`/`deny` (or `yes`/`no`), it resumes the paused kagent
+task. The marker rides the conversation history, so this needs **no extra
+LibreChat configuration** and works across multiple replicas — use the same
+secret on each. When `PROXY_HITL_SECRET` is unset, approval prompts are
+informational only.
 
 ## Deployment
 

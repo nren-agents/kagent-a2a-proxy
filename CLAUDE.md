@@ -52,6 +52,8 @@ All runtime config is `PROXY_*` env vars (or a `.env` file), loaded into a **mod
 
 Because `settings` is built at import, **`conftest.py` sets `PROXY_AGENT_MAP`/`PROXY_DEFAULT_AGENT` before any package import** — preserve that ordering when adding tests that touch config.
 
+**Human-in-the-loop (`hitl.py`).** When `PROXY_HITL_SECRET` is set, an `input-required` tool-approval prompt carries an HMAC-signed, render-invisible marker (HTML comment) encoding the paused task's `taskId`/`contextId`. On the next request, `main._select_chunks` recovers it from the assistant history (`hitl.extract_pending`), classifies the user reply (`hitl.classify_decision`), and resumes via `kagent_client.resume_stream` (a decision `DataPart`) instead of a fresh prompt. Stateless — no store, works across replicas (LibreChat resends assistant content verbatim). NOTE: the resume wire shape is inferred from kagent source and should be validated against a live kagent.
+
 ### Conventions
 
 - mypy runs **strict** on `kagent_a2a_proxy.*`; tests/conftest are exempt. Keep new package code fully typed.

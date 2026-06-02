@@ -51,6 +51,14 @@ class Settings(BaseSettings):
         default="info",
         description="Log level for the proxy's own logger.",
     )
+    hitl_secret: str | None = Field(
+        default=None,
+        description=(
+            "Secret for HMAC-signing the human-in-the-loop approval marker "
+            "embedded in assistant replies. When unset, tool-approval requests "
+            "are informational only (no stateful approve/deny resume)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _default_agent_in_map(self) -> Settings:

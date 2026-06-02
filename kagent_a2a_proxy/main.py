@@ -20,8 +20,8 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import kagent_client
-from .agent_runner import collect_agent_response, translate_stream
+from . import hitl, kagent_client
+from .agent_runner import collect_response, translate_resume, translate_stream
 from .config import settings
 from .mcp_server import mcp
 from .models import (
@@ -102,10 +102,11 @@ async def chat_completions(request: Request) -> StreamingResponse | JSONResponse
 
     messages = [m.model_dump() for m in req.messages]
     session_id = str(uuid.uuid4())
+    chunks = _select_chunks(req.model, messages, session_id)
 
     if req.stream:
         return StreamingResponse(
-            _stream_response(req.model, messages, session_id),
+            _stream_response(req.model, chunks),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -113,15 +114,62 @@ async def chat_completions(request: Request) -> StreamingResponse | JSONResponse
             },
         )
     try:
-        return await _blocking_response(req.model, messages, session_id)
+        return await _blocking_response(req.model, chunks)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-async def _stream_response(
+def _last_user_text(messages: list[dict[str, Any]]) -> str:
+    return next(
+        (
+            str(m.get("content") or "")
+            for m in reversed(messages)
+            if m.get("role") == "user"
+        ),
+        "",
+    )
+
+
+def _select_chunks(
     model: str,
     messages: list[dict[str, Any]],
     session_id: str,
+) -> AsyncIterator[ChatCompletionChunk]:
+    """Pick the chunk source: resume a pending HITL approval if the user's reply
+    is a clear approve/deny, re-prompt if it's ambiguous, else a fresh call."""
+    pending = hitl.extract_pending(messages, settings.hitl_secret)
+    if pending is None:
+        return translate_stream(model, messages, session_id)
+    decision = hitl.classify_decision(_last_user_text(messages))
+    if decision is None:
+        return _clarify_chunks(model, pending)
+    return translate_resume(model, pending["task_id"], pending["context_id"], decision)
+
+
+async def _clarify_chunks(
+    model: str,
+    pending: dict[str, str],
+) -> AsyncIterator[ChatCompletionChunk]:
+    """Re-prompt for an ambiguous reply, re-embedding the marker so the pending
+    approval survives to the next turn."""
+    marker = hitl.encode_marker(
+        pending["task_id"], pending["context_id"], settings.hitl_secret
+    )
+    text = (
+        "\n⚠️ There's a pending approval. Please reply **approve** or **deny** "
+        f"to continue.\n{marker}"
+    )
+    yield ChatCompletionChunk(
+        model=model, choices=[StreamChoice(delta=DeltaContent(content=text))]
+    )
+    yield ChatCompletionChunk(
+        model=model, choices=[StreamChoice(delta=DeltaContent(), finish_reason="stop")]
+    )
+
+
+async def _stream_response(
+    model: str,
+    chunks: AsyncIterator[ChatCompletionChunk],
 ) -> AsyncIterator[str]:
     """Yield SSE chunks for a streaming chat completions response."""
 
@@ -133,7 +181,7 @@ async def _stream_response(
     yield opening.to_sse()
 
     try:
-        async for chunk in translate_stream(model, messages, session_id):
+        async for chunk in chunks:
             yield chunk.to_sse()
     except httpx.HTTPStatusError as exc:
         logger.error("kagent error: %s", exc)
@@ -161,11 +209,10 @@ def _error_chunk(model: str, message: str) -> ChatCompletionChunk:
 
 async def _blocking_response(
     model: str,
-    messages: list[dict[str, Any]],
-    session_id: str,
+    chunks: AsyncIterator[ChatCompletionChunk],
 ) -> JSONResponse:
     """Accumulate the full stream and return a non-streaming response."""
-    full_content = await collect_agent_response(model, messages, session_id)
+    full_content = await collect_response(chunks)
 
     return JSONResponse(
         {

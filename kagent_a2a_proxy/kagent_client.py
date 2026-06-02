@@ -88,29 +88,39 @@ def _build_payload(messages: list[dict[str, Any]], session_id: str) -> dict[str,
     }
 
 
-async def stream_agent(
-    model: str,
-    messages: list[dict[str, Any]],
-    session_id: str | None = None,
-) -> AsyncIterator[str]:
+def _build_decision_payload(
+    task_id: str,
+    context_id: str,
+    decision: str,
+    rejection_reason: str = "",
+) -> dict[str, Any]:
+    """Build the A2A message/stream payload that resumes a paused (input-required)
+    task with a human-in-the-loop decision.
+
+    Mirrors kagent's own client (`_remote_a2a_tool` / `_hitl_utils`): the decision
+    rides a DataPart, and the paused task is referenced by taskId + contextId on
+    the message itself. NOTE: the exact wire shape is inferred from kagent source
+    and should be validated against a live kagent before relying on it.
     """
-    Call kagent A2A message/stream and yield raw SSE lines.
+    data: dict[str, Any] = {"decision_type": decision}
+    if decision == "reject" and rejection_reason:
+        data["rejection_reason"] = rejection_reason
+    message: dict[str, Any] = {
+        "role": "user",
+        "taskId": task_id,
+        "contextId": context_id,
+        "parts": [{"kind": "data", "data": data}],
+    }
+    return {
+        "jsonrpc": "2.0",
+        "method": "message/stream",
+        "id": str(uuid.uuid4()),
+        "params": {"message": message},
+    }
 
-    Yields each line as a string (including the 'data: ' prefix).
-    Caller is responsible for parsing.
-    """
-    agent_name = _resolve_agent(model)
-    url = _a2a_url(agent_name)
-    sid = session_id or str(uuid.uuid4())
-    payload = _build_payload(messages, sid)
 
-    logger.info(
-        "Streaming agent=%s session=%s url=%s",
-        agent_name,
-        sid,
-        url,
-    )
-
+async def _stream(url: str, payload: dict[str, Any]) -> AsyncIterator[str]:
+    """POST a JSON-RPC payload and yield raw SSE lines (incl. the 'data:' prefix)."""
     async with _client.stream(
         "POST",
         url,
@@ -141,3 +151,49 @@ async def stream_agent(
 
         async for line in response.aiter_lines():
             yield line
+
+
+async def stream_agent(
+    model: str,
+    messages: list[dict[str, Any]],
+    session_id: str | None = None,
+) -> AsyncIterator[str]:
+    """
+    Call kagent A2A message/stream and yield raw SSE lines.
+
+    Yields each line as a string (including the 'data: ' prefix).
+    Caller is responsible for parsing.
+    """
+    agent_name = _resolve_agent(model)
+    url = _a2a_url(agent_name)
+    sid = session_id or str(uuid.uuid4())
+    payload = _build_payload(messages, sid)
+
+    logger.info("Streaming agent=%s session=%s url=%s", agent_name, sid, url)
+
+    async for line in _stream(url, payload):
+        yield line
+
+
+async def resume_stream(
+    model: str,
+    task_id: str,
+    context_id: str,
+    decision: str,
+    rejection_reason: str = "",
+) -> AsyncIterator[str]:
+    """Resume a paused (input-required) task with an approve/reject decision."""
+    agent_name = _resolve_agent(model)
+    url = _a2a_url(agent_name)
+    payload = _build_decision_payload(task_id, context_id, decision, rejection_reason)
+
+    logger.info(
+        "Resuming agent=%s task=%s decision=%s url=%s",
+        agent_name,
+        task_id,
+        decision,
+        url,
+    )
+
+    async for line in _stream(url, payload):
+        yield line

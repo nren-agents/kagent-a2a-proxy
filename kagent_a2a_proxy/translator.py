@@ -14,6 +14,8 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
+from .config import settings
+from .hitl import encode_marker
 from .models import (
     A2ADataPart,
     A2AMessage,
@@ -183,7 +185,11 @@ def _input_required_text(event: A2ATaskStatusUpdateEvent) -> str:
     if tool or hint:
         target = f" for `{tool}`" if tool else ""
         suffix = f": {hint}" if hint else ""
-        return f"\n⚠️ Approval required{target}{suffix}\n"
+        # When HITL is enabled, embed a signed marker so the user's next
+        # "approve"/"deny" reply can be routed back to this paused task.
+        marker = encode_marker(event.taskId, event.contextId, settings.hitl_secret)
+        instruction = " — reply **approve** or **deny** to continue" if marker else ""
+        return f"\n⚠️ Approval required{target}{suffix}{instruction}\n{marker}"
     text = message.text() if message else ""
     return f"\n> ❓ {text}\n" if text else ""
 

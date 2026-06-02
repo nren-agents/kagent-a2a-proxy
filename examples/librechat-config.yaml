@@ -58,3 +58,6 @@ data:
           titleModel: "<agent-1>"
           modelDisplayLabel: "kagent Agents"
           streamRate: 0
+          # Human-in-the-loop: if the proxy has PROXY_HITL_SECRET set, reply
+          # "approve" or "deny" to a "⚠️ Approval required" message to resume a
+          # paused tool. No extra LibreChat config is required.

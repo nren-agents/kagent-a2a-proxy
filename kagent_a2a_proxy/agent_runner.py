@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from .kagent_client import stream_agent
+from .kagent_client import resume_stream, stream_agent
 from .models import ChatCompletionChunk
 from .translator import event_to_chunks, parse_sse_line
 
@@ -57,12 +57,11 @@ def _chunk_content(chunk: ChatCompletionChunk) -> str | None:
     )
 
 
-async def translate_stream(
+async def _translate_lines(
+    line_stream: AsyncIterator[str],
     model: str,
-    messages: list[dict[str, Any]],
-    session_id: str,
 ) -> AsyncIterator[ChatCompletionChunk]:
-    """Stream a kagent A2A call as OpenAI chunks, suppressing kagent's duplicate
+    """Translate raw SSE lines to OpenAI chunks, suppressing kagent's duplicate
     answer copies.
 
     kagent streams the answer as `working` text partials, then re-sends it as a
@@ -73,7 +72,7 @@ async def translate_stream(
     """
     last_reasoning: str | None = None
     content_emitted = False
-    async for event in _events(stream_agent(model, messages, session_id)):
+    async for event in _events(line_stream):
         is_artifact = event.get("kind") == "artifact-update"
         for chunk in event_to_chunks(event, model):
             reasoning = _chunk_reasoning(chunk)
@@ -86,25 +85,58 @@ async def translate_stream(
                 yield chunk
 
 
-async def collect_agent_response(
+async def translate_stream(
     model: str,
     messages: list[dict[str, Any]],
     session_id: str,
+) -> AsyncIterator[ChatCompletionChunk]:
+    """Stream a fresh kagent A2A call as de-duplicated OpenAI chunks."""
+    async for chunk in _translate_lines(
+        stream_agent(model, messages, session_id), model
+    ):
+        yield chunk
+
+
+async def translate_resume(
+    model: str,
+    task_id: str,
+    context_id: str,
+    decision: str,
+    rejection_reason: str = "",
+) -> AsyncIterator[ChatCompletionChunk]:
+    """Resume a paused task with an approve/reject decision, as OpenAI chunks."""
+    async for chunk in _translate_lines(
+        resume_stream(model, task_id, context_id, decision, rejection_reason), model
+    ):
+        yield chunk
+
+
+async def collect_response(
+    chunks: AsyncIterator[ChatCompletionChunk],
     on_progress: ProgressCallback | None = None,
 ) -> str:
-    """
-    Drain a kagent A2A stream and return the artifact's final text.
+    """Drain a chunk stream into the final content string.
 
-    If `on_progress` is provided, await it once per reasoning/working delta
-    (the same text that goes into LibreChat's "Thinking" pane). The returned
-    string is the concatenation of all `delta.content` pieces — i.e. the
-    artifact answer plus any user-facing prompt.
+    If `on_progress` is provided, await it once per reasoning delta (the text
+    that goes into LibreChat's "Thinking" pane).
     """
     parts: list[str] = []
-    async for chunk in translate_stream(model, messages, session_id):
+    async for chunk in chunks:
         for delta in (choice.delta for choice in chunk.choices):
             if delta.content:
                 parts.append(delta.content)
             elif delta.reasoning_content and on_progress is not None:
                 await on_progress(delta.reasoning_content)
     return "".join(parts)
+
+
+async def collect_agent_response(
+    model: str,
+    messages: list[dict[str, Any]],
+    session_id: str,
+    on_progress: ProgressCallback | None = None,
+) -> str:
+    """Drain a fresh kagent A2A call into the final content string."""
+    return await collect_response(
+        translate_stream(model, messages, session_id), on_progress
+    )

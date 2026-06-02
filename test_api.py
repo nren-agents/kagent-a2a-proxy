@@ -8,6 +8,8 @@ partials (→ content); the same text is re-sent as a non-partial copy and as
 an artifact-update, both of which the proxy de-duplicates.
 """
 
+import json
+
 import httpx
 import respx
 from fastapi.testclient import TestClient
@@ -19,6 +21,7 @@ from conftest import (
     sse_response,
     working_event,
 )
+from kagent_a2a_proxy import hitl
 from kagent_a2a_proxy.config import settings
 from kagent_a2a_proxy.main import app
 
@@ -201,6 +204,88 @@ def test_streaming_failed_state_surfaces_error():
     assert "Agent run failed" in body
     assert "timed out" in body
     assert "[DONE]" in body
+
+
+# ---------------------------------------------------------------------------
+# /v1/chat/completions — human-in-the-loop approve / deny resume
+# ---------------------------------------------------------------------------
+
+
+def _approval_history(marker: str, reply: str) -> list[dict]:
+    return [
+        {"role": "user", "content": "restart the router"},
+        {"role": "assistant", "content": "⚠️ Approval required" + marker},
+        {"role": "user", "content": reply},
+    ]
+
+
+@respx.mock
+def test_approve_reply_resumes_paused_task(monkeypatch):
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    marker = hitl.encode_marker("task-7", "ctx-7", "s3cr3t")
+    route = respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response(
+                [
+                    working_event("Restarted ", partial=True),
+                    working_event("the router.", partial=True),
+                    completed_event(),
+                ]
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": _approval_history(marker, "approve"),
+            "stream": True,
+        },
+    ) as r:
+        assert r.status_code == 200
+        body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
+
+    # The proxy sent a decision DataPart routed by taskId + contextId.
+    assert route.called
+    sent = json.loads(route.calls.last.request.content)
+    message = sent["params"]["message"]
+    assert message["taskId"] == "task-7"
+    assert message["contextId"] == "ctx-7"
+    assert message["parts"][0]["data"]["decision_type"] == "approve"
+    # The resumed answer streams back to the reply.
+    assert "Restarted" in body
+    assert "the router." in body
+
+
+@respx.mock
+def test_ambiguous_reply_reprompts_without_calling_kagent(monkeypatch):
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    marker = hitl.encode_marker("task-7", "ctx-7", "s3cr3t")
+    route = respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200, content=b"", headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": _approval_history(marker, "what will it do?"),
+            "stream": True,
+        },
+    ) as r:
+        assert r.status_code == 200
+        body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
+
+    assert not route.called  # no kagent call for an ambiguous reply
+    assert "pending approval" in body
+    assert "kagent-hitl" in body  # marker re-embedded so state survives
 
 
 # ---------------------------------------------------------------------------

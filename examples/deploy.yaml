@@ -58,6 +58,14 @@ spec:
         # for unknown models instead.
         # - name: PROXY_DEFAULT_AGENT
         #   value: "<agent-1>"
+        # Optional: enable actionable human-in-the-loop tool approvals. Reply
+        # "approve"/"deny" in chat to resume a paused tool. Use a random secret,
+        # the SAME value on every replica. Unset = approvals are informational.
+        # - name: PROXY_HITL_SECRET
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: kagent-a2a-proxy
+        #       key: hitl-secret
         resources:
           limits:
             cpu: 500m
