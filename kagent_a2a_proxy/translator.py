@@ -92,12 +92,10 @@ def event_to_chunks(
         return
 
     state = event.status.state
-    message = event.status.message
 
     # ------------------------------------------------------------------
-    # input-required — the agent is blocked waiting on the user. This is
-    # the only user-facing status, so it goes to the visible `content`
-    # channel; otherwise the question hides in LibreChat's "Thinking" pane.
+    # input-required — the agent is blocked waiting on the user → visible
+    # `content` so the prompt isn't hidden in LibreChat's "Thinking" pane.
     # ------------------------------------------------------------------
     if state == "input-required":
         text = _input_required_text(event)
@@ -106,32 +104,72 @@ def event_to_chunks(
         return
 
     # ------------------------------------------------------------------
-    # Tool call in progress (working) — surfaced in the "thinking" channel
-    # as a structured blockquote with the call's compact args.
+    # Terminal failure / auth states — surface a visible notice + stop,
+    # otherwise the stream just ends silently with no answer.
     # ------------------------------------------------------------------
-    call = _function_call(message)
-    if event.is_tool_call() and call and call.get("name"):
-        args = _format_tool_args(call.get("args"))
-        yield _thinking_chunk(_tool_call_text(str(call["name"]), args), model)
+    if state in ("failed", "canceled", "rejected", "auth-required"):
+        yield _text_chunk(_terminal_notice(state, event.status.message), model)
+        yield _finish_chunk(model)
         return
 
     # ------------------------------------------------------------------
-    # Regular assistant narration (working state) — also "thinking"
-    # ------------------------------------------------------------------
-    if message and state == "working":
-        text = message.text()
-        if text:
-            yield _thinking_chunk(f"{text.strip()}\n\n", model)
-        return
-
-    # ------------------------------------------------------------------
-    # Completed — just signal stop; final answer arrives via artifact
+    # Completed — signal stop; the answer arrived via working text.
     # ------------------------------------------------------------------
     if state == "completed":
         yield _finish_chunk(model)
         return
 
-    # All other states (submitted, cancelled, failed) — no output
+    # ------------------------------------------------------------------
+    # working — route each part: tool calls + thoughts → "thinking",
+    # the agent's prose answer → visible `content`.
+    # ------------------------------------------------------------------
+    if state == "working":
+        yield from _working_chunks(event, model)
+
+    # submitted and any other states — no output
+
+
+def _working_chunks(
+    event: A2ATaskStatusUpdateEvent,
+    model: str,
+) -> Iterator[ChatCompletionChunk]:
+    """Route a working-state event's parts to the right OpenAI channel."""
+    message = event.status.message
+
+    # In-progress tool call → Thinking pane. Tool *results* are dropped.
+    if event.is_tool_call():
+        call = _function_call(message)
+        if call and call.get("name"):
+            args = _format_tool_args(call.get("args"))
+            yield _thinking_chunk(_tool_call_text(str(call["name"]), args), model)
+        return
+    if event.is_function_response():
+        return
+
+    # Text parts. kagent re-sends the streamed partials as one non-partial
+    # aggregate copy — skip it (is_partial() is False) to avoid duplication.
+    if message is None or event.is_partial() is False:
+        return
+    if thought := message.thought_text():
+        yield _thinking_chunk(f"{thought.strip()}\n\n", model)
+    if answer := message.answer_text():
+        yield _text_chunk(answer, model)
+
+
+def _terminal_notice(state: str, message: A2AMessage | None) -> str:
+    """Visible one-line notice for a non-completed terminal / auth state."""
+    detail = message.text().strip() if message else ""
+    match state:
+        case "auth-required":
+            label = "🔐 Authentication required to continue"
+        case "failed":
+            label = "⚠️ Agent run failed"
+        case "canceled":
+            label = "⚠️ Agent run was canceled"
+        case _:
+            label = "⚠️ Agent request was rejected"
+    suffix = f": {detail}" if detail else ""
+    return f"\n{label}{suffix}\n"
 
 
 def _input_required_text(event: A2ATaskStatusUpdateEvent) -> str:

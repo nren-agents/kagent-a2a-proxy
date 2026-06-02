@@ -55,9 +55,13 @@ def test_tool_name_sanitisation(agent_key: str, expected_tool_name: str):
 
 
 @respx.mock
-async def test_tool_invocation_returns_artifact_text():
+async def test_tool_invocation_returns_answer_text():
+    # The answer streams as working-text partials; the aggregate copy and the
+    # artifact are de-duplicated, so the tool returns the answer exactly once.
     events = [
-        working_event("Looking at telemetry..."),
+        working_event("All systems ", partial=True),
+        working_event("nominal.", partial=True),
+        working_event("All systems nominal.", partial=False),
         artifact_event("All systems nominal."),
         completed_event(),
     ]

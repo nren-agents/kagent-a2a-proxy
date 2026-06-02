@@ -37,18 +37,38 @@ def sse_response(events: list[dict]) -> bytes:
     return "".join(lines).encode()
 
 
-def working_event(text: str) -> dict:
+def working_event(
+    text: str, partial: bool | None = None, thought: bool = False
+) -> dict:
+    """A working-state status-update carrying agent text.
+
+    `partial` mirrors kagent's `kagent_adk_partial` (True = streaming fragment,
+    False = aggregated full copy). `thought` flags the part as ADK reasoning.
+    """
+    part: dict = {"kind": "text", "text": text}
+    if thought:
+        part["metadata"] = {"kagent_thought": True}
+    metadata: dict = {}
+    if partial is not None:
+        metadata["kagent_adk_partial"] = partial
     return {
         "kind": "status-update",
         "status": {
             "state": "working",
-            "message": {
-                "role": "assistant",
-                "parts": [{"kind": "text", "text": text}],
-            },
+            "message": {"role": "agent", "parts": [part]},
         },
-        "metadata": {},
+        "metadata": metadata,
     }
+
+
+def failed_event(detail: str = "") -> dict:
+    status: dict = {"state": "failed"}
+    if detail:
+        status["message"] = {
+            "role": "agent",
+            "parts": [{"kind": "text", "text": detail}],
+        }
+    return {"kind": "status-update", "final": True, "status": status, "metadata": {}}
 
 
 def artifact_event(text: str) -> dict:

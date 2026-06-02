@@ -87,6 +87,11 @@ class ModelList(BaseModel):
 class A2ATextPart(BaseModel):
     kind: Literal["text"]
     text: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    def is_thought(self) -> bool:
+        """True if kagent flagged this part as ADK reasoning (part.thought)."""
+        return bool(self.metadata.get("kagent_thought"))
 
 
 class A2ADataPart(BaseModel):
@@ -104,6 +109,20 @@ class A2AMessage(BaseModel):
     def text(self) -> str:
         return " ".join(p.text for p in self.parts if isinstance(p, A2ATextPart))
 
+    def answer_text(self) -> str:
+        """Concatenated non-thought text — the user-facing answer."""
+        return "".join(
+            p.text
+            for p in self.parts
+            if isinstance(p, A2ATextPart) and not p.is_thought()
+        )
+
+    def thought_text(self) -> str:
+        """Concatenated thought-flagged text — the agent's reasoning."""
+        return "".join(
+            p.text for p in self.parts if isinstance(p, A2ATextPart) and p.is_thought()
+        )
+
 
 class A2ATaskStatus(BaseModel):
     state: str
@@ -114,14 +133,24 @@ class A2ATaskStatusUpdateEvent(BaseModel):
     """Wraps a TaskStatusUpdateEvent from the A2A stream."""
 
     id: str = ""
+    final: bool = False
     status: A2ATaskStatus
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def is_tool_call(self) -> bool:
         return self.metadata.get("kagent_type") == "function_call"
 
+    def is_function_response(self) -> bool:
+        return self.metadata.get("kagent_type") == "function_response"
+
     def is_long_running(self) -> bool:
         return bool(self.metadata.get("kagent_is_long_running"))
+
+    def is_partial(self) -> bool | None:
+        """ADK streaming flag: True = streaming fragment, False = aggregated
+        full copy (to be skipped), None = not signalled (non-ADK executor)."""
+        value = self.metadata.get("kagent_adk_partial")
+        return value if isinstance(value, bool) else None
 
 
 class A2AArtifact(BaseModel):

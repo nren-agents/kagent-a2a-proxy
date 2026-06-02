@@ -4,16 +4,19 @@ Tests for the A2A → OpenAI delta translator.
 kagent's A2A stream uses the pre-v1.0 protocol shape:
   - Parts discriminate on `kind` ("text" / "data"), not `type`.
   - Each SSE line is a JSON-RPC envelope (handled by parse_sse_line).
-  - Status-update text (working / tool-calls) maps to reasoning_content
-    (LibreChat's "Thinking" pane); artifact-update text maps to content
-    (the visible assistant reply); completed status-updates emit finish_reason
-    only — the artifact carries the actual answer.
+  - working text routes by role: ADK thought parts (`kagent_thought`) and tool
+    calls → reasoning_content (LibreChat's "Thinking" pane); the agent's prose
+    answer → content (the visible reply). The non-partial aggregate copy
+    (`kagent_adk_partial=false`) is skipped.
   - input-required (free-text questions and tool-approval requests) maps to
     content, so the prompt is visible instead of buried in the Thinking pane.
+  - failed / canceled / rejected / auth-required map to a visible content notice
+    plus finish; completed emits finish_reason only.
 """
 
 import pytest
 
+from conftest import working_event
 from kagent_a2a_proxy.translator import event_to_chunks, parse_sse_line
 
 # ---------------------------------------------------------------------------
@@ -44,28 +47,75 @@ def test_parse_sse_line(line: str, expected):
 
 
 # ---------------------------------------------------------------------------
-# event_to_chunks — status-update (thinking channel)
+# event_to_chunks — working text routing (answer → content, thought → pane)
 # ---------------------------------------------------------------------------
 
 
-def test_working_text_goes_to_reasoning_content():
-    event = {
-        "kind": "status-update",
-        "status": {
-            "state": "working",
-            "message": {
-                "role": "assistant",
-                "parts": [{"kind": "text", "text": "Checking telemetry..."}],
-            },
-        },
-        "metadata": {},
-    }
+@pytest.mark.parametrize(
+    "event,channel,expected",
+    [
+        pytest.param(
+            working_event("Pong!", partial=True),
+            "content",
+            "Pong!",
+            id="answer-partial-to-content",
+        ),
+        pytest.param(
+            working_event("Checking telemetry...", thought=True, partial=True),
+            "reasoning",
+            "Checking telemetry...",
+            id="thought-to-reasoning",
+        ),
+        pytest.param(
+            working_event("answer with no partial flag"),
+            "content",
+            "answer with no partial flag",
+            id="answer-no-flag-to-content",
+        ),
+    ],
+)
+def test_working_text_routing(event: dict, channel: str, expected: str):
     chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     delta = chunks[0].choices[0].delta
-    assert delta.reasoning_content.strip() == "Checking telemetry..."
-    assert delta.content is None
-    assert chunks[0].choices[0].finish_reason is None
+    if channel == "content":
+        assert delta.content == expected
+        assert delta.reasoning_content is None
+    else:
+        assert delta.reasoning_content is not None
+        assert delta.reasoning_content.strip() == expected
+        assert delta.content is None
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(
+            working_event("aggregate answer copy", partial=False),
+            id="non-partial-answer-skipped",
+        ),
+        pytest.param(
+            working_event("aggregate thought copy", thought=True, partial=False),
+            id="non-partial-thought-skipped",
+        ),
+        pytest.param(
+            {
+                "kind": "status-update",
+                "status": {
+                    "state": "working",
+                    "message": {
+                        "role": "agent",
+                        "parts": [{"kind": "data", "data": {"result": "ok"}}],
+                    },
+                },
+                "metadata": {"kagent_type": "function_response"},
+            },
+            id="function-response-dropped",
+        ),
+    ],
+)
+def test_working_events_producing_no_chunks(event: dict):
+    assert list(event_to_chunks(event, "agent-one")) == []
 
 
 @pytest.mark.parametrize(
@@ -221,6 +271,43 @@ def test_artifact_update_text_goes_to_content():
     delta = chunks[0].choices[0].delta
     assert delta.content == "Here is the final answer."
     assert delta.reasoning_content is None
+
+
+# ---------------------------------------------------------------------------
+# event_to_chunks — terminal / auth states surface a visible notice + stop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "state,detail,expected",
+    [
+        pytest.param("failed", "tool timed out", "Agent run failed", id="failed"),
+        pytest.param("canceled", "", "canceled", id="canceled"),
+        pytest.param("rejected", "", "rejected", id="rejected"),
+        pytest.param(
+            "auth-required",
+            "login at example.com",
+            "Authentication required",
+            id="auth",
+        ),
+    ],
+)
+def test_terminal_state_surfaces_notice_and_finish(
+    state: str, detail: str, expected: str
+):
+    status: dict = {"state": state}
+    if detail:
+        status["message"] = {
+            "role": "agent",
+            "parts": [{"kind": "text", "text": detail}],
+        }
+    event = {"kind": "status-update", "status": status, "metadata": {}}
+    chunks = list(event_to_chunks(event, "agent-one"))
+    assert len(chunks) == 2
+    assert expected in chunks[0].choices[0].delta.content
+    if detail:
+        assert detail in chunks[0].choices[0].delta.content
+    assert chunks[1].choices[0].finish_reason == "stop"
 
 
 # ---------------------------------------------------------------------------

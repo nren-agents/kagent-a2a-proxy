@@ -3,15 +3,22 @@ Integration tests for /v1/chat/completions and /v1/models endpoints.
 Uses respx to mock the kagent A2A HTTP calls.
 
 kagent events are wrapped in a JSON-RPC envelope and use the pre-v1.0
-`kind` discriminator. The final assistant text arrives as an artifact-update,
-not as a completed status-update message.
+`kind` discriminator. The agent's answer is streamed as `working` text
+partials (→ content); the same text is re-sent as a non-partial copy and as
+an artifact-update, both of which the proxy de-duplicates.
 """
 
 import httpx
 import respx
 from fastapi.testclient import TestClient
 
-from conftest import artifact_event, completed_event, sse_response, working_event
+from conftest import (
+    artifact_event,
+    completed_event,
+    failed_event,
+    sse_response,
+    working_event,
+)
 from kagent_a2a_proxy.config import settings
 from kagent_a2a_proxy.main import app
 
@@ -49,15 +56,17 @@ def test_list_models():
 
 
 # ---------------------------------------------------------------------------
-# /v1/chat/completions — non-streaming returns artifact text
+# /v1/chat/completions — non-streaming reconstructs the streamed answer
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 def test_non_streaming_completion():
     events = [
-        working_event("Thinking..."),
-        artifact_event("Done — interface is healthy."),
+        working_event("Done — ", partial=True),
+        working_event("interface is healthy.", partial=True),
+        working_event("Done — interface is healthy.", partial=False),  # aggregate
+        artifact_event("Done — interface is healthy."),  # duplicate
         completed_event(),
     ]
     respx.post(KAGENT_URL).mock(
@@ -81,20 +90,23 @@ def test_non_streaming_completion():
     body = r.json()
     assert body["object"] == "chat.completion"
     content = body["choices"][0]["message"]["content"]
-    # Artifact text shows up as the assistant content; working text does not.
+    # The streamed partials reconstruct the answer; the aggregate copy and the
+    # artifact are de-duplicated, so it appears exactly once.
     assert content == "Done — interface is healthy."
 
 
 # ---------------------------------------------------------------------------
-# /v1/chat/completions — streaming
+# /v1/chat/completions — streaming: answer → content, no duplication
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
-def test_streaming_completion():
+def test_streaming_answer_goes_to_content_without_duplication():
     events = [
-        working_event("Running query..."),
-        artifact_event("Result: ok"),
+        working_event("Result ", partial=True),
+        working_event("okandgo", partial=True),
+        working_event("Result okandgo", partial=False),  # aggregate, skipped
+        artifact_event("Result okandgo"),  # duplicate, dropped
         completed_event(),
     ]
     respx.post(KAGENT_URL).mock(
@@ -115,28 +127,56 @@ def test_streaming_completion():
         },
     ) as r:
         assert r.status_code == 200
-        lines = [line for line in r.iter_lines() if line.startswith("data:")]
+        body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
 
-    body = "\n".join(lines)
     assert '"role":"assistant"' in body or '"role": "assistant"' in body
     assert "[DONE]" in body
-    # The artifact text reaches the client as a content delta.
-    assert "Result: ok" in body
-    # The working text reaches the client as a reasoning_content delta (LibreChat "Thinking" pane).
-    assert "Running query" in body
-    assert "reasoning_content" in body
+    # Answer streams as content deltas, once (aggregate + artifact deduped).
+    assert '"content":"okandgo"' in body
+    assert body.count("okandgo") == 1
+    # No populated reasoning channel for a pure answer (only null keys).
+    assert '"reasoning_content":"' not in body
 
 
 @respx.mock
-def test_streaming_deduplicates_consecutive_reasoning():
-    # kagent re-emits each working-state narration twice (a streaming copy and
-    # a turn-final copy). The proxy collapses the consecutive duplicate so the
-    # Thinking pane isn't doubled.
+def test_streaming_thought_goes_to_reasoning():
     events = [
-        working_event("Investigating the circuit"),
-        working_event("Investigating the circuit"),
-        artifact_event("Done."),
+        working_event("let me think", thought=True, partial=True),
+        working_event("the answer", partial=True),
+        artifact_event("the answer"),
         completed_event(),
+    ]
+    respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response(events),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    ) as r:
+        assert r.status_code == 200
+        body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
+
+    assert '"reasoning_content":"' in body
+    assert "let me think" in body
+    assert '"content":"the answer"' in body
+    assert body.count("the answer") == 1
+
+
+@respx.mock
+def test_streaming_failed_state_surfaces_error():
+    events = [
+        working_event("trying", partial=True),
+        failed_event("tool 'get_telemetry' timed out"),
     ]
     respx.post(KAGENT_URL).mock(
         return_value=httpx.Response(
@@ -158,8 +198,9 @@ def test_streaming_deduplicates_consecutive_reasoning():
         assert r.status_code == 200
         body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
 
-    assert body.count("Investigating the circuit") == 1
-    assert "Done." in body
+    assert "Agent run failed" in body
+    assert "timed out" in body
+    assert "[DONE]" in body
 
 
 # ---------------------------------------------------------------------------

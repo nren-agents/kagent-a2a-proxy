@@ -45,26 +45,44 @@ def _chunk_reasoning(chunk: ChatCompletionChunk) -> str | None:
     )
 
 
+def _chunk_content(chunk: ChatCompletionChunk) -> str | None:
+    """Return the chunk's content text, if it carries any."""
+    return next(
+        (
+            choice.delta.content
+            for choice in chunk.choices
+            if choice.delta.content is not None
+        ),
+        None,
+    )
+
+
 async def translate_stream(
     model: str,
     messages: list[dict[str, Any]],
     session_id: str,
 ) -> AsyncIterator[ChatCompletionChunk]:
-    """Stream a kagent A2A call as OpenAI chunks, dropping consecutive duplicate
-    reasoning blocks.
+    """Stream a kagent A2A call as OpenAI chunks, suppressing kagent's duplicate
+    answer copies.
 
-    kagent re-emits each working-state narration twice (a streaming copy and a
-    turn-final copy); left alone they double up in LibreChat's "Thinking" pane.
-    We suppress a reasoning chunk whose text matches the one immediately before
-    it. Content chunks always pass through and reset the streak.
+    kagent streams the answer as `working` text partials, then re-sends it as a
+    non-partial aggregate (dropped in the translator) and again as the final
+    `artifact-update`. Once any answer content has streamed, we drop the
+    artifact copy. We also drop a reasoning chunk identical to the one
+    immediately before it (a cheap safety net for repeated thoughts).
     """
     last_reasoning: str | None = None
+    content_emitted = False
     async for event in _events(stream_agent(model, messages, session_id)):
+        is_artifact = event.get("kind") == "artifact-update"
         for chunk in event_to_chunks(event, model):
             reasoning = _chunk_reasoning(chunk)
-            is_duplicate = reasoning is not None and reasoning == last_reasoning
+            content = _chunk_content(chunk)
+            drop_artifact = is_artifact and content is not None and content_emitted
+            dup_reasoning = reasoning is not None and reasoning == last_reasoning
             last_reasoning = reasoning
-            if not is_duplicate:
+            if not (drop_artifact or dup_reasoning):
+                content_emitted = content_emitted or bool(content)
                 yield chunk
 
 
