@@ -155,8 +155,11 @@ def _working_chunks(
     # aggregate copy — skip it (is_partial() is False) to avoid duplication.
     if message is None or event.is_partial() is False:
         return
+    # Emit thought fragments verbatim: the model's own newlines carry the
+    # paragraph structure, and agent_runner normalizes the channel as a whole.
+    # Stripping/padding each fragment here would shred multi-fragment thoughts.
     if thought := message.thought_text():
-        yield _thinking_chunk(f"{thought.strip()}\n\n", model)
+        yield _thinking_chunk(thought, model)
     if answer := message.answer_text():
         yield _text_chunk(answer, model)
 
@@ -226,9 +229,13 @@ def _function_call(message: A2AMessage | None) -> dict[str, Any] | None:
 
 
 def _tool_call_text(name: str, args: str) -> str:
-    """Format an in-progress tool call as a Markdown blockquote block."""
+    """Format an in-progress tool call as a Markdown blockquote block.
+
+    Lead with a blank line so the block always separates from preceding thought
+    text; agent_runner collapses any resulting excess to a single blank line.
+    """
     args_line = f"\n> `{args}`" if args else ""
-    return f"\n> 🔧 **{name}**{args_line}\n\n"
+    return f"\n\n> 🔧 **{name}**{args_line}\n\n"
 
 
 def _format_tool_args(args: Any) -> str:

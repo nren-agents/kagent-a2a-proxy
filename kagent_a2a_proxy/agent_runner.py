@@ -14,6 +14,7 @@ forwarding reasoning deltas to an optional `on_progress` callback.
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -57,6 +58,35 @@ def _chunk_content(chunk: ChatCompletionChunk) -> str | None:
     )
 
 
+_MULTI_NEWLINE = re.compile(r"\n{3,}")
+
+
+def _normalize(text: str, tail: int | None) -> tuple[str, int | None]:
+    """Normalize one chunk's text against a channel's trailing-newline state.
+
+    `tail` is the count of trailing newlines already emitted on this channel,
+    or None if nothing has streamed yet. Collapses internal runs of 3+ newlines
+    to one blank line, strips leading newlines at the channel start, and trims a
+    chunk's leading newlines so a boundary never stacks past one blank line.
+    Returns the (possibly empty) text to emit and the channel's new tail.
+    """
+    text = _MULTI_NEWLINE.sub("\n\n", text)
+    if tail is None:
+        text = text.lstrip("\n")
+        if text == "":
+            return "", None
+    else:
+        lead = len(text) - len(text.lstrip("\n"))
+        allowed = max(0, 2 - tail)
+        if lead > allowed:
+            text = text[lead - allowed :]
+        if text == "":
+            return "", tail
+    if text.strip("\n") == "":
+        return text, min((tail or 0) + len(text), 2)
+    return text, len(text) - len(text.rstrip("\n"))
+
+
 async def _translate_lines(
     line_stream: AsyncIterator[str],
     model: str,
@@ -69,9 +99,14 @@ async def _translate_lines(
     `artifact-update`. Once any answer content has streamed, we drop the
     artifact copy. We also drop a reasoning chunk identical to the one
     immediately before it (a cheap safety net for repeated thoughts).
+
+    Surviving chunks are whitespace-normalized per channel (visible content vs.
+    the reasoning pane) so injected separators never stack past one blank line.
     """
     last_reasoning: str | None = None
     content_emitted = False
+    content_tail: int | None = None
+    reasoning_tail: int | None = None
     async for event in _events(line_stream):
         is_artifact = event.get("kind") == "artifact-update"
         for chunk in event_to_chunks(event, model):
@@ -81,8 +116,19 @@ async def _translate_lines(
             dup_reasoning = reasoning is not None and reasoning == last_reasoning
             last_reasoning = reasoning
             if not (drop_artifact or dup_reasoning):
-                content_emitted = content_emitted or bool(content)
-                yield chunk
+                if content is not None:
+                    normalized, content_tail = _normalize(content, content_tail)
+                    if normalized:
+                        content_emitted = True
+                        chunk.choices[0].delta.content = normalized
+                        yield chunk
+                elif reasoning is not None:
+                    normalized, reasoning_tail = _normalize(reasoning, reasoning_tail)
+                    if normalized:
+                        chunk.choices[0].delta.reasoning_content = normalized
+                        yield chunk
+                else:
+                    yield chunk
 
 
 async def translate_stream(
