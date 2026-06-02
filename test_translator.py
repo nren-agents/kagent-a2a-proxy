@@ -8,6 +8,8 @@ kagent's A2A stream uses the pre-v1.0 protocol shape:
     (LibreChat's "Thinking" pane); artifact-update text maps to content
     (the visible assistant reply); completed status-updates emit finish_reason
     only — the artifact carries the actual answer.
+  - input-required (free-text questions and tool-approval requests) maps to
+    content, so the prompt is visible instead of buried in the Thinking pane.
 """
 
 import pytest
@@ -61,12 +63,23 @@ def test_working_text_goes_to_reasoning_content():
     chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     delta = chunks[0].choices[0].delta
-    assert delta.reasoning_content == "Checking telemetry..."
+    assert delta.reasoning_content.strip() == "Checking telemetry..."
     assert delta.content is None
     assert chunks[0].choices[0].finish_reason is None
 
 
-def test_tool_call_annotation_goes_to_reasoning_content():
+@pytest.mark.parametrize(
+    "args,expected",
+    [
+        pytest.param({}, ["> 🔧 **influxdb_query**"], id="no-args"),
+        pytest.param(
+            {"range": "1h", "limit": 5},
+            ["> 🔧 **influxdb_query**", '> `range="1h", limit=5`'],
+            id="with-args",
+        ),
+    ],
+)
+def test_tool_call_renders_as_structured_block(args: dict, expected: list[str]):
     event = {
         "kind": "status-update",
         "status": {
@@ -74,7 +87,7 @@ def test_tool_call_annotation_goes_to_reasoning_content():
             "message": {
                 "role": "assistant",
                 "parts": [
-                    {"kind": "data", "data": {"name": "influxdb_query", "args": {}}}
+                    {"kind": "data", "data": {"name": "influxdb_query", "args": args}}
                 ],
             },
         },
@@ -83,11 +96,17 @@ def test_tool_call_annotation_goes_to_reasoning_content():
     chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     reasoning = chunks[0].choices[0].delta.reasoning_content
-    assert "influxdb_query" in reasoning
-    assert "🔧" in reasoning
+    assert reasoning is not None
+    assert all(fragment in reasoning for fragment in expected)
+    assert chunks[0].choices[0].delta.content is None
 
 
-def test_hitl_approval_request_goes_to_reasoning_content():
+# ---------------------------------------------------------------------------
+# event_to_chunks — input-required prompts go to the visible content channel
+# ---------------------------------------------------------------------------
+
+
+def test_hitl_approval_request_goes_to_content():
     event = {
         "kind": "status-update",
         "status": {
@@ -116,9 +135,33 @@ def test_hitl_approval_request_goes_to_reasoning_content():
     }
     chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
-    reasoning = chunks[0].choices[0].delta.reasoning_content
-    assert "⚠️" in reasoning
-    assert "Approval required" in reasoning
+    delta = chunks[0].choices[0].delta
+    # The prompt must be visible (content), not hidden in the Thinking pane.
+    assert delta.reasoning_content is None
+    assert "⚠️" in delta.content
+    assert "Approval required" in delta.content
+    assert "restart_router" in delta.content
+    assert "Restart router spine-01?" in delta.content
+
+
+def test_free_text_input_required_goes_to_content():
+    event = {
+        "kind": "status-update",
+        "status": {
+            "state": "input-required",
+            "message": {
+                "role": "assistant",
+                "parts": [{"kind": "text", "text": "Which interface should I check?"}],
+            },
+        },
+        "metadata": {},
+    }
+    chunks = list(event_to_chunks(event, "agent-one"))
+    assert len(chunks) == 1
+    delta = chunks[0].choices[0].delta
+    assert delta.reasoning_content is None
+    assert "Which interface should I check?" in delta.content
+    assert "❓" in delta.content
 
 
 # ---------------------------------------------------------------------------

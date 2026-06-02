@@ -1,25 +1,24 @@
 """
-Shared high-level orchestration for invoking a kagent agent and collecting
-its final text response.
+Shared high-level orchestration for invoking a kagent agent.
 
 Used by:
+  - the streaming branch of /v1/chat/completions (SSE chunks)
   - the blocking branch of /v1/chat/completions (single JSON response)
   - the MCP tools exposed under /mcp (each tool returns one final string)
 
-Streams from kagent_client + translates via translator, accumulating the
-artifact content. Optional `on_progress` callback fires for each reasoning
-(thinking/working) delta so MCP tools can forward them as progress
-notifications.
+`translate_stream` is the single pipeline: it streams from kagent_client,
+parses + translates via translator, and drops consecutive duplicate reasoning
+blocks. `collect_agent_response` drains that pipeline into a final string,
+forwarding reasoning deltas to an optional `on_progress` callback.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from itertools import chain
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from .kagent_client import stream_agent
-from .models import DeltaContent
+from .models import ChatCompletionChunk
 from .translator import event_to_chunks, parse_sse_line
 
 ProgressCallback = Callable[[str], Awaitable[None]]
@@ -34,12 +33,39 @@ async def _events(
             yield event
 
 
-def _iter_deltas(event: dict[str, Any], model: str) -> Iterator[DeltaContent]:
-    """Flatten one A2A event into the delta objects across all chunks/choices."""
-    return chain.from_iterable(
-        (choice.delta for choice in chunk.choices)
-        for chunk in event_to_chunks(event, model)
+def _chunk_reasoning(chunk: ChatCompletionChunk) -> str | None:
+    """Return the chunk's reasoning_content text, if it carries any."""
+    return next(
+        (
+            choice.delta.reasoning_content
+            for choice in chunk.choices
+            if choice.delta.reasoning_content is not None
+        ),
+        None,
     )
+
+
+async def translate_stream(
+    model: str,
+    messages: list[dict[str, Any]],
+    session_id: str,
+) -> AsyncIterator[ChatCompletionChunk]:
+    """Stream a kagent A2A call as OpenAI chunks, dropping consecutive duplicate
+    reasoning blocks.
+
+    kagent re-emits each working-state narration twice (a streaming copy and a
+    turn-final copy); left alone they double up in LibreChat's "Thinking" pane.
+    We suppress a reasoning chunk whose text matches the one immediately before
+    it. Content chunks always pass through and reset the streak.
+    """
+    last_reasoning: str | None = None
+    async for event in _events(stream_agent(model, messages, session_id)):
+        for chunk in event_to_chunks(event, model):
+            reasoning = _chunk_reasoning(chunk)
+            is_duplicate = reasoning is not None and reasoning == last_reasoning
+            last_reasoning = reasoning
+            if not is_duplicate:
+                yield chunk
 
 
 async def collect_agent_response(
@@ -54,11 +80,11 @@ async def collect_agent_response(
     If `on_progress` is provided, await it once per reasoning/working delta
     (the same text that goes into LibreChat's "Thinking" pane). The returned
     string is the concatenation of all `delta.content` pieces — i.e. the
-    artifact answer.
+    artifact answer plus any user-facing prompt.
     """
     parts: list[str] = []
-    async for event in _events(stream_agent(model, messages, session_id)):
-        for delta in _iter_deltas(event, model):
+    async for chunk in translate_stream(model, messages, session_id):
+        for delta in (choice.delta for choice in chunk.choices):
             if delta.content:
                 parts.append(delta.content)
             elif delta.reasoning_content and on_progress is not None:

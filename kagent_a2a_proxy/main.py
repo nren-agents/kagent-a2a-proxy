@@ -21,9 +21,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import kagent_client
-from .agent_runner import collect_agent_response
+from .agent_runner import collect_agent_response, translate_stream
 from .config import settings
-from .kagent_client import stream_agent
 from .mcp_server import mcp
 from .models import (
     ChatCompletionChunk,
@@ -33,7 +32,6 @@ from .models import (
     ModelObject,
     StreamChoice,
 )
-from .translator import event_to_chunks, parse_sse_line
 
 logging.basicConfig(
     level=settings.log_level.upper(),
@@ -135,12 +133,8 @@ async def _stream_response(
     yield opening.to_sse()
 
     try:
-        async for raw_line in stream_agent(model, messages, session_id):
-            event = parse_sse_line(raw_line)
-            if event is None:
-                continue
-            for chunk in event_to_chunks(event, model):
-                yield chunk.to_sse()
+        async for chunk in translate_stream(model, messages, session_id):
+            yield chunk.to_sse()
     except httpx.HTTPStatusError as exc:
         logger.error("kagent error: %s", exc)
         yield _error_chunk(

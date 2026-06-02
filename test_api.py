@@ -127,6 +127,41 @@ def test_streaming_completion():
     assert "reasoning_content" in body
 
 
+@respx.mock
+def test_streaming_deduplicates_consecutive_reasoning():
+    # kagent re-emits each working-state narration twice (a streaming copy and
+    # a turn-final copy). The proxy collapses the consecutive duplicate so the
+    # Thinking pane isn't doubled.
+    events = [
+        working_event("Investigating the circuit"),
+        working_event("Investigating the circuit"),
+        artifact_event("Done."),
+        completed_event(),
+    ]
+    respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response(events),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [{"role": "user", "content": "check"}],
+            "stream": True,
+        },
+    ) as r:
+        assert r.status_code == 200
+        body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
+
+    assert body.count("Investigating the circuit") == 1
+    assert "Done." in body
+
+
 # ---------------------------------------------------------------------------
 # /v1/chat/completions — kagent 503 error
 # ---------------------------------------------------------------------------

@@ -123,19 +123,6 @@ class A2ATaskStatusUpdateEvent(BaseModel):
     def is_long_running(self) -> bool:
         return bool(self.metadata.get("kagent_is_long_running"))
 
-    def tool_name(self) -> str | None:
-        msg = self.status.message
-        if not msg:
-            return None
-        return next(
-            (
-                part.data.get("name")
-                for part in msg.parts
-                if isinstance(part, A2ADataPart) and isinstance(part.data, dict)
-            ),
-            None,
-        )
-
 
 class A2AArtifact(BaseModel):
     artifactId: str = ""
