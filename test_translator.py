@@ -267,8 +267,10 @@ def test_approval_embeds_signed_marker_when_secret_set(monkeypatch):
     chunk = next(iter(event_to_chunks(event, "agent-one")))
     content = chunk.choices[0].delta.content
     assert "approve" in content  # the visible reply instruction
-    # The exact signed marker for this (task, context) must be embedded.
-    assert hitl.encode_marker("t-9", "c-9", "s3cr3t").strip() in content
+    # The embedded (invisible) marker round-trips back to the paused task ids.
+    assert hitl.extract_pending(
+        [{"role": "assistant", "content": content}], "s3cr3t"
+    ) == {"task_id": "t-9", "context_id": "c-9"}
 
 
 # ---------------------------------------------------------------------------

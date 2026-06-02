@@ -18,9 +18,11 @@ def _messages(*turns: tuple[str, str]) -> list[dict[str, str]]:
     return [{"role": role, "content": content} for role, content in turns]
 
 
-def test_marker_round_trip():
+def test_marker_round_trip_and_is_invisible():
     marker = hitl.encode_marker("task-1", "ctx-1", SECRET)
-    assert "<!--kagent-hitl" in marker
+    assert marker  # non-empty
+    # Invisible: nothing but zero-width characters (no renderable text).
+    assert all(ch in ("\u200b", "\u200c") for ch in marker)
     messages = _messages(
         ("user", "do x"),
         ("assistant", "⚠️ Approval required" + marker),
@@ -43,10 +45,9 @@ def test_wrong_secret_rejected():
 
 
 def test_tampered_payload_rejected():
-    marker = hitl.encode_marker("task-1", "ctx-1", SECRET)
-    # Swap the signed payload for a forged one while keeping the signature.
-    head, _, sig = marker.rpartition(":")
-    forged = f"{head[: head.rindex(':') + 1]}Zm9yZ2Vk:{sig}"
+    # A payload whose signature was computed over different bytes must not verify.
+    body = f"v1:tampered-payload:{hitl._sign('other-payload', SECRET)}"
+    forged = hitl._encode_zw(body)
     messages = _messages(("assistant", "x" + forged))
     assert hitl.extract_pending(messages, SECRET) is None
 

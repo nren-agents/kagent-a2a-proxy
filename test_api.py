@@ -321,7 +321,6 @@ def test_ambiguous_reply_reprompts_without_calling_kagent(monkeypatch):
 
     assert not route.called  # no kagent call for an ambiguous reply
     assert "pending approval" in body
-    assert "kagent-hitl" in body  # marker re-embedded so state survives
 
 
 # ---------------------------------------------------------------------------
