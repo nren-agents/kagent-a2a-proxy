@@ -16,7 +16,12 @@ kagent's A2A stream uses the pre-v1.0 protocol shape:
 
 import pytest
 
-from conftest import tool_call_event, tool_response_event, working_event
+from conftest import (
+    narration_aggregate,
+    tool_call_event,
+    tool_response_event,
+    working_event,
+)
 from kagent_a2a_proxy.translator import event_to_chunks, parse_sse_line
 
 # ---------------------------------------------------------------------------
@@ -74,7 +79,9 @@ def test_parse_sse_line(line: str, expected):
         ),
     ],
 )
-def test_working_text_routing(event: dict, channel: str, expected: str):
+def test_working_text_routing(
+    stream_mode: None, event: dict, channel: str, expected: str
+):
     chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     delta = chunks[0].choices[0].delta
@@ -122,8 +129,86 @@ def test_working_text_routing(event: dict, channel: str, expected: str):
         ),
     ],
 )
-def test_working_events_producing_no_chunks(event: dict):
+def test_working_events_producing_no_chunks(stream_mode: None, event: dict):
     assert list(event_to_chunks(event, "agent-one")) == []
+
+
+# ---------------------------------------------------------------------------
+# event_to_chunks — deemphasize mode (the default): aggregates drive output,
+# narration is blockquoted, raw partials are skipped
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "event,channel,expected",
+    [
+        pytest.param(
+            working_event("aggregate report", partial=False),
+            "content",
+            "aggregate report",
+            id="aggregate-answer-to-content",
+        ),
+        pytest.param(
+            working_event("Thinking...", thought=True, partial=True),
+            "reasoning",
+            "Thinking...",
+            id="thought-partial-to-reasoning",
+        ),
+        pytest.param(
+            working_event("no-flag answer"),
+            "content",
+            "no-flag answer",
+            id="answer-no-flag-to-content",
+        ),
+    ],
+)
+def test_deemphasize_text_routing(
+    deemphasize_mode: None, event: dict, channel: str, expected: str
+):
+    chunks = list(event_to_chunks(event, "agent-one"))
+    assert len(chunks) == 1
+    delta = chunks[0].choices[0].delta
+    if channel == "content":
+        assert delta.content == expected
+        assert delta.reasoning_content is None
+    else:
+        assert delta.reasoning_content is not None
+        assert delta.reasoning_content.strip() == expected
+        assert delta.content is None
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(
+            working_event("streamed fragment", partial=True),
+            id="answer-partial-skipped",
+        ),
+        pytest.param(
+            working_event("aggregate thought", thought=True, partial=False),
+            id="aggregate-thought-skipped",
+        ),
+        pytest.param(
+            tool_response_event("list_agents"),
+            id="function-response-dropped",
+        ),
+    ],
+)
+def test_deemphasize_events_producing_no_chunks(deemphasize_mode: None, event: dict):
+    assert list(event_to_chunks(event, "agent-one")) == []
+
+
+def test_deemphasize_narration_aggregate_splits_blockquote_and_tool(
+    deemphasize_mode: None,
+):
+    # A narration aggregate carries the burst text + the tool call it triggered:
+    # text → blockquote in the reply, tool → Thinking pane.
+    event = narration_aggregate("Let me query the topology.", "ana_topology_agent")
+    chunks = list(event_to_chunks(event, "agent-one"))
+    content = "".join(c.choices[0].delta.content or "" for c in chunks)
+    reasoning = "".join(c.choices[0].delta.reasoning_content or "" for c in chunks)
+    assert "> Let me query the topology." in content
+    assert "🔧 **ana_topology_agent**" in reasoning
 
 
 @pytest.mark.parametrize(

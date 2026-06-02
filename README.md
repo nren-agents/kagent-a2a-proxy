@@ -27,11 +27,12 @@ client ──► /mcp tool call ───────┤  proxy  ──► POST 
                           kagent-controller
 ```
 
-- An OpenAI request is translated into a kagent A2A `message/stream` call.
-  The agent's `working` events become `reasoning_content` deltas; the final
-  artifact text becomes regular `content`.
-- MCP tool calls go through the same A2A path. The tool returns the artifact
-  text; `working` text fires `Context.report_progress` notifications.
+- An OpenAI request is translated into a kagent A2A `message/stream` call. The
+  agent's answer goes to `content` (the visible reply); reasoning and tool
+  activity go to `reasoning_content` (LibreChat's "Thinking" pane). Between-tool
+  narration is de-emphasized by default — see [Narration mode](#narration-mode).
+- MCP tool calls go through the same A2A path. The tool returns the answer text;
+  reasoning/tool activity fires `Context.report_progress` notifications.
 
 ## Quickstart
 
@@ -78,6 +79,7 @@ All settings are read from `PROXY_*` environment variables (or a local
 | `PROXY_DEFAULT_AGENT` | string | _unset_ | Optional fallback for unknown models. Must appear as a value in `PROXY_AGENT_MAP`. |
 | `PROXY_REQUEST_TIMEOUT` | float (seconds) | `300` | Per-request timeout for kagent A2A calls. |
 | `PROXY_LOG_LEVEL` | `debug`/`info`/`warning`/`error`/`critical` | `info` | Log level for the proxy's logger. |
+| `PROXY_NARRATION_MODE` | `deemphasize`/`stream` | `deemphasize` | How an agent's between-tool progress narration is rendered. See [Narration mode](#narration-mode). |
 | `PROXY_HITL_SECRET` | string | _unset_ | Secret for HMAC-signing the human-in-the-loop approval marker. When set, tool-approval prompts become actionable (reply `approve`/`deny`); when unset, they are informational only. Use the same value on every replica. |
 
 `PROXY_AGENT_MAP` is parsed as JSON. Example:
@@ -89,6 +91,26 @@ PROXY_AGENT_MAP='{"weather":"weather-agent","alerts":"alerting-agent"}'
 Misconfiguration fails fast at startup: invalid URLs, unknown log levels,
 non-positive timeouts, and `PROXY_DEFAULT_AGENT` values that don't appear in
 the map all raise a `ValidationError`.
+
+### Narration mode
+
+Agents that use tools tend to "think out loud" between tool calls ("I'll start
+by querying the topology…", "Now I'll pull telemetry…"). kagent streams that
+narration as plain answer text, so without help it piles up in the reply and
+buries the final answer.
+
+- **`deemphasize`** (default) collapses each narration burst into a Markdown
+  blockquote above the answer, keeping the answer front-and-center. kagent
+  re-sends each burst as a non-partial *aggregate* bundled with the tool call it
+  triggered; the proxy uses that aggregate as the authoritative copy, so answer
+  text is emitted **per-burst** rather than token-streamed (which also renders
+  Markdown tables more cleanly). Tool calls still go to the "Thinking" pane.
+- **`stream`** token-streams all working text into the reply verbatim — the
+  original behavior. Narration and answer run together as they arrive, with the
+  live typewriter effect, but the reply is busier.
+
+Set via `PROXY_NARRATION_MODE`. It's a per-deployment, restart-free flip, handy
+for validating the default against your agents before committing to it.
 
 ### Human-in-the-loop approvals
 

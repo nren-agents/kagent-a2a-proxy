@@ -4,8 +4,10 @@ Uses respx to mock the kagent A2A HTTP calls.
 
 kagent events are wrapped in a JSON-RPC envelope and use the pre-v1.0
 `kind` discriminator. The agent's answer is streamed as `working` text
-partials (→ content); the same text is re-sent as a non-partial copy and as
-an artifact-update, both of which the proxy de-duplicates.
+partials, re-sent as a non-partial aggregate copy and as an artifact-update.
+Rendering depends on `narration_mode` (see config): the default `deemphasize`
+emits each burst from its aggregate (narration blockquoted, answer plain);
+`stream` token-streams the partials verbatim. Tests pin the mode they assert.
 """
 
 import json
@@ -18,8 +20,10 @@ from conftest import (
     artifact_event,
     completed_event,
     failed_event,
+    narration_aggregate,
     sse_response,
     tool_call_event,
+    tool_response_event,
     working_event,
 )
 from kagent_a2a_proxy import hitl
@@ -105,7 +109,7 @@ def test_non_streaming_completion():
 
 
 @respx.mock
-def test_streaming_answer_goes_to_content_without_duplication():
+def test_streaming_answer_goes_to_content_without_duplication(stream_mode):
     events = [
         working_event("Result ", partial=True),
         working_event("okandgo", partial=True),
@@ -177,7 +181,7 @@ def test_streaming_thought_goes_to_reasoning():
 
 
 @respx.mock
-def test_streaming_tool_call_renders_in_reasoning():
+def test_streaming_tool_call_renders_in_reasoning(stream_mode):
     # Real kagent shape: kagent_type on the data part, not the event.
     events = [
         working_event("Looking up agents ", partial=True),
@@ -209,6 +213,45 @@ def test_streaming_tool_call_renders_in_reasoning():
     assert '"reasoning_content":"' in body
     assert "list_agents" in body
     assert '"content":"Looking up agents "' in body
+
+
+@respx.mock
+def test_streaming_deemphasizes_narration_by_default(deemphasize_mode):
+    # Default mode: narration → blockquote in the reply, tool → Thinking pane,
+    # the answer (from the aggregate) plain and once (artifact deduped).
+    events = [
+        working_event("Let me", partial=True),
+        working_event(" check.", partial=True),
+        narration_aggregate("Let me check.", "list_agents"),
+        tool_response_event("list_agents"),
+        working_event("Here is the answer.", partial=False),
+        artifact_event("Here is the answer."),
+        completed_event(),
+    ]
+    respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response(events),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    ) as r:
+        assert r.status_code == 200
+        body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
+
+    assert "> Let me check." in body  # narration de-emphasized as a blockquote
+    assert '"reasoning_content":"' in body and "list_agents" in body
+    assert "Here is the answer." in body
+    assert body.count("Here is the answer.") == 1
 
 
 @respx.mock
@@ -266,6 +309,7 @@ def test_approve_reply_resumes_paused_task(monkeypatch):
                 [
                     working_event("Restarted ", partial=True),
                     working_event("the router.", partial=True),
+                    artifact_event("Restarted the router."),
                     completed_event(),
                 ]
             ),

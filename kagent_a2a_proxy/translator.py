@@ -135,33 +135,97 @@ def _working_chunks(
     event: A2ATaskStatusUpdateEvent,
     model: str,
 ) -> Iterator[ChatCompletionChunk]:
-    """Route a working-state event's parts to the right OpenAI channel."""
-    message = event.status.message
+    """Route a working-state event's parts per the configured narration mode."""
+    match settings.narration_mode:
+        case "deemphasize":
+            yield from _working_deemphasize(event, model)
+        case _:
+            yield from _working_stream(event, model)
 
-    # In-progress tool call → Thinking pane. Tool *results* are dropped.
+
+def _tool_call_chunks(
+    message: A2AMessage | None, model: str
+) -> Iterator[ChatCompletionChunk]:
+    """Render an in-progress tool call into the Thinking pane (results dropped)."""
+    call = _function_call(message)
+    name = call.get("name") if call else None
+    # adk_request_confirmation is the approval mechanism itself — it surfaces
+    # via the input-required branch (⚠️), not as a 🔧 tool line.
+    if call and name and name != "adk_request_confirmation":
+        args = _format_tool_args(call.get("args"))
+        yield _thinking_chunk(_tool_call_text(str(name), args), model)
+
+
+def _working_stream(
+    event: A2ATaskStatusUpdateEvent, model: str
+) -> Iterator[ChatCompletionChunk]:
+    """Original behavior: token-stream every working text part into the reply.
+
+    Thought fragments and tool calls go to the Thinking pane; the agent's prose
+    (narration and answer alike) streams verbatim into `content`. The non-partial
+    aggregate copy (is_partial() is False) is skipped to avoid duplication.
+    """
+    message = event.status.message
     if event.is_tool_call():
-        call = _function_call(message)
-        name = call.get("name") if call else None
-        # adk_request_confirmation is the approval mechanism itself — it surfaces
-        # via the input-required branch (⚠️), not as a 🔧 tool line.
-        if call and name and name != "adk_request_confirmation":
-            args = _format_tool_args(call.get("args"))
-            yield _thinking_chunk(_tool_call_text(str(name), args), model)
+        yield from _tool_call_chunks(message, model)
         return
     if event.is_function_response():
         return
-
-    # Text parts. kagent re-sends the streamed partials as one non-partial
-    # aggregate copy — skip it (is_partial() is False) to avoid duplication.
     if message is None or event.is_partial() is False:
         return
     # Emit thought fragments verbatim: the model's own newlines carry the
     # paragraph structure, and agent_runner normalizes the channel as a whole.
-    # Stripping/padding each fragment here would shred multi-fragment thoughts.
     if thought := message.thought_text():
         yield _thinking_chunk(thought, model)
     if answer := message.answer_text():
         yield _text_chunk(answer, model)
+
+
+def _working_deemphasize(
+    event: A2ATaskStatusUpdateEvent, model: str
+) -> Iterator[ChatCompletionChunk]:
+    """De-emphasize between-tool narration so the final answer stays prominent.
+
+    kagent emits each narration burst as token partials followed by a non-partial
+    aggregate that bundles the full burst text with the tool call it triggered;
+    the final burst (the answer) has no tool call. So the aggregate is the
+    authoritative per-burst copy: skip the partials, render an aggregate that
+    carries a tool call as a blockquoted narration block plus the tool call, and
+    an aggregate with no tool call as the plain answer. Non-ADK executors (no
+    aggregate; is_partial() is None) emit their text directly.
+    """
+    message = event.status.message
+    partial = event.is_partial()
+
+    if event.is_tool_call():
+        if (
+            message is not None
+            and partial is not True
+            and (narration := message.answer_text().strip())
+        ):
+            yield _text_chunk(_narration_block(narration), model)
+        yield from _tool_call_chunks(message, model)
+        return
+    if event.is_function_response():
+        return
+    if message is None:
+        return
+    # Thoughts still stream live (from partial fragments) to the Thinking pane.
+    if partial is not False and (thought := message.thought_text()):
+        yield _thinking_chunk(thought, model)
+    # Answer text is taken from the aggregate (is_partial() is False) or, for
+    # non-ADK executors, directly (is_partial() is None). Raw partials are
+    # skipped — the aggregate carries the full burst text.
+    if partial is True:
+        return
+    if answer := message.answer_text():
+        yield _text_chunk(answer, model)
+
+
+def _narration_block(text: str) -> str:
+    """Render between-tool progress narration as a de-emphasized blockquote."""
+    quoted = "\n".join(f"> {line}".rstrip() for line in text.splitlines())
+    return f"\n\n{quoted}\n\n"
 
 
 def _terminal_notice(state: str, message: A2AMessage | None) -> str:
@@ -229,13 +293,9 @@ def _function_call(message: A2AMessage | None) -> dict[str, Any] | None:
 
 
 def _tool_call_text(name: str, args: str) -> str:
-    """Format an in-progress tool call as a Markdown blockquote block.
-
-    Lead with a blank line so the block always separates from preceding thought
-    text; agent_runner collapses any resulting excess to a single blank line.
-    """
+    """Format an in-progress tool call as a Markdown blockquote block."""
     args_line = f"\n> `{args}`" if args else ""
-    return f"\n\n> 🔧 **{name}**{args_line}\n\n"
+    return f"\n> 🔧 **{name}**{args_line}\n\n"
 
 
 def _format_tool_args(args: Any) -> str:

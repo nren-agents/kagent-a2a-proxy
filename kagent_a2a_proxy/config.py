@@ -51,6 +51,18 @@ class Settings(BaseSettings):
         default="info",
         description="Log level for the proxy's own logger.",
     )
+    narration_mode: Literal["stream", "deemphasize"] = Field(
+        default="deemphasize",
+        description=(
+            "How an agent's between-tool progress narration is rendered. "
+            "'deemphasize' (default) collapses each narration burst into a "
+            "Markdown blockquote above the final answer, keeping the answer "
+            "front-and-center; the answer is emitted per-burst (from kagent's "
+            "non-partial aggregate) rather than token-streamed. 'stream' "
+            "token-streams all working text into the reply verbatim (the "
+            "original behavior)."
+        ),
+    )
     hitl_secret: str | None = Field(
         default=None,
         description=(

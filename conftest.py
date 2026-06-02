@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import os
 
+import pytest
+
 # Must run before any ``from kagent_a2a_proxy ...`` import.
 os.environ.setdefault(
     "PROXY_AGENT_MAP",
@@ -124,3 +126,43 @@ def completed_event() -> dict:
         "status": {"state": "completed"},
         "metadata": {},
     }
+
+
+def narration_aggregate(text: str, tool: str, args: dict | None = None) -> dict:
+    """kagent's real shape for a narration burst that ends in a tool call: a
+    non-partial aggregate (`kagent_adk_partial=false`) whose message carries the
+    full burst text *and* the function-call data part."""
+    return {
+        "kind": "status-update",
+        "status": {
+            "state": "working",
+            "message": {
+                "role": "agent",
+                "parts": [
+                    {"kind": "text", "text": text},
+                    {
+                        "kind": "data",
+                        "data": {"name": tool, "args": args or {}},
+                        "metadata": {"kagent_type": "function_call"},
+                    },
+                ],
+            },
+        },
+        "metadata": {"kagent_adk_partial": False},
+    }
+
+
+@pytest.fixture
+def stream_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the original token-streaming narration behavior for a test."""
+    from kagent_a2a_proxy.config import settings
+
+    monkeypatch.setattr(settings, "narration_mode", "stream")
+
+
+@pytest.fixture
+def deemphasize_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the blockquote-narration behavior for a test (also the default)."""
+    from kagent_a2a_proxy.config import settings
+
+    monkeypatch.setattr(settings, "narration_mode", "deemphasize")

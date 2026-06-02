@@ -150,6 +150,7 @@ async def _stream(url: str, payload: dict[str, Any]) -> AsyncIterator[str]:
             )
 
         async for line in response.aiter_lines():
+            logger.debug("kagent SSE << %s", line)
             yield line
 
 

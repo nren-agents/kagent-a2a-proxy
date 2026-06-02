@@ -15,11 +15,39 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from conftest import tool_call_event, working_event
+from conftest import (
+    artifact_event,
+    narration_aggregate,
+    tool_call_event,
+    tool_response_event,
+    working_event,
+)
 from kagent_a2a_proxy.agent_runner import _normalize, _translate_lines
 from kagent_a2a_proxy.models import ChatCompletionChunk
 
 COMPLETED = {"kind": "status-update", "status": {"state": "completed"}}
+
+# A trace faithful to a real kagent ADK run: each narration burst streams as
+# token partials, then a non-partial aggregate bundles the full burst text with
+# the tool call; the final burst (the report) has no tool call and is echoed as
+# an artifact. See the captured surf-a2a-proxy stream that motivated this.
+TRACE = [
+    working_event("I'll start", partial=True),
+    working_event(" by querying ANA.", partial=True),
+    narration_aggregate("I'll start by querying ANA.", "ana_topology_agent"),
+    tool_response_event("ana_topology_agent"),
+    working_event("Now I", partial=True),
+    working_event(" pull telemetry.", partial=True),
+    narration_aggregate("Now I pull telemetry.", "telemetry_agent"),
+    tool_response_event("telemetry_agent"),
+    working_event("I now have", partial=True),
+    working_event(" both sides.\n\n---\n\n# Report\n\nAll good.", partial=True),
+    working_event(
+        "I now have both sides.\n\n---\n\n# Report\n\nAll good.", partial=False
+    ),
+    artifact_event("I now have both sides.\n\n---\n\n# Report\n\nAll good."),
+    COMPLETED,
+]
 
 
 async def _lines(events: list[dict]) -> AsyncIterator[str]:
@@ -105,7 +133,7 @@ async def test_reasoning_never_leads_with_whitespace() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_answer_fragments_pass_through_clean() -> None:
+async def test_answer_fragments_pass_through_clean(stream_mode: None) -> None:
     content, reasoning = await _run(
         [
             working_event("Hello", partial=True),
@@ -117,7 +145,7 @@ async def test_answer_fragments_pass_through_clean() -> None:
     assert reasoning == ""
 
 
-async def test_realistic_stream_has_no_double_blank_lines() -> None:
+async def test_realistic_stream_has_no_double_blank_lines(stream_mode: None) -> None:
     content, reasoning = await _run(
         [
             working_event("Let me check.", thought=True, partial=True),
@@ -130,3 +158,43 @@ async def test_realistic_stream_has_no_double_blank_lines() -> None:
     assert content == "The answer is 42."
     assert "\n\n\n" not in reasoning
     assert "\n\n\n" not in content
+
+
+# ---------------------------------------------------------------------------
+# narration_mode — deemphasize (default) vs stream
+# ---------------------------------------------------------------------------
+
+
+async def test_deemphasize_narration_blockquoted_report_plain(
+    deemphasize_mode: None,
+) -> None:
+    content, reasoning = await _run(TRACE)
+    # Each narration burst → a de-emphasized blockquote in the visible reply.
+    assert "> I'll start by querying ANA." in content
+    assert "> Now I pull telemetry." in content
+    # The final report → plain (not blockquoted), front-and-center, exactly once
+    # (the duplicate artifact is dropped).
+    assert "# Report\n\nAll good." in content
+    assert "> # Report" not in content
+    assert content.count("All good.") == 1
+    # Tool calls render in the Thinking pane, never in the reply.
+    assert "🔧 **ana_topology_agent**" in reasoning
+    assert "🔧 **telemetry_agent**" in reasoning
+    assert "ana_topology_agent" not in content
+    # Narration is not duplicated into the Thinking pane.
+    assert "I'll start by querying ANA." not in reasoning
+
+
+async def test_deemphasize_skips_token_partials(deemphasize_mode: None) -> None:
+    # Only the aggregate is emitted; the streamed fragments must not also leak.
+    content, _ = await _run(TRACE)
+    assert content.count("I'll start by querying ANA.") == 1
+    assert "I'll start\n" not in content
+    assert "I'll start by" not in content.replace("> I'll start by querying ANA.", "")
+
+
+async def test_stream_mode_keeps_token_streaming(stream_mode: None) -> None:
+    content, _ = await _run(TRACE)
+    # Old behavior: partials stream verbatim, no blockquote de-emphasis.
+    assert "I'll start by querying ANA." in content
+    assert "> I'll start" not in content

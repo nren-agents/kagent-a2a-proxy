@@ -21,6 +21,7 @@ def test_defaults_are_empty_and_safe(monkeypatch):
     assert s.default_agent is None
     assert s.log_level == "info"
     assert s.request_timeout == 300.0
+    assert s.narration_mode == "deemphasize"
 
 
 def test_kagent_base_url_must_be_a_url():
@@ -31,6 +32,11 @@ def test_kagent_base_url_must_be_a_url():
 def test_log_level_must_be_in_literal_set():
     with pytest.raises(ValidationError):
         Settings(log_level="trace")
+
+
+def test_narration_mode_must_be_in_literal_set():
+    with pytest.raises(ValidationError):
+        Settings(narration_mode="quiet")
 
 
 def test_request_timeout_must_be_positive():
