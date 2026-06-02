@@ -141,9 +141,12 @@ def _working_chunks(
     # In-progress tool call → Thinking pane. Tool *results* are dropped.
     if event.is_tool_call():
         call = _function_call(message)
-        if call and call.get("name"):
+        name = call.get("name") if call else None
+        # adk_request_confirmation is the approval mechanism itself — it surfaces
+        # via the input-required branch (⚠️), not as a 🔧 tool line.
+        if call and name and name != "adk_request_confirmation":
             args = _format_tool_args(call.get("args"))
-            yield _thinking_chunk(_tool_call_text(str(call["name"]), args), model)
+            yield _thinking_chunk(_tool_call_text(str(name), args), model)
         return
     if event.is_function_response():
         return

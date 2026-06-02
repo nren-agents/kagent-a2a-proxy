@@ -97,6 +97,7 @@ class A2ATextPart(BaseModel):
 class A2ADataPart(BaseModel):
     kind: Literal["data"]
     data: Any = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 A2APart = A2ATextPart | A2ADataPart
@@ -139,14 +140,27 @@ class A2ATaskStatusUpdateEvent(BaseModel):
     status: A2ATaskStatus
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    def kagent_type(self) -> str | None:
+        """`kagent_type` ("function_call"/"function_response") of the message's
+        data part. Real kagent streams put it on the **part** metadata; older /
+        synthetic shapes put it on the event metadata, so fall back to that."""
+        message = self.status.message
+        part_type = next(
+            (
+                part.metadata.get("kagent_type")
+                for part in (message.parts if message else [])
+                if isinstance(part, A2ADataPart) and part.metadata.get("kagent_type")
+            ),
+            None,
+        )
+        result = part_type or self.metadata.get("kagent_type")
+        return result if isinstance(result, str) else None
+
     def is_tool_call(self) -> bool:
-        return self.metadata.get("kagent_type") == "function_call"
+        return self.kagent_type() == "function_call"
 
     def is_function_response(self) -> bool:
-        return self.metadata.get("kagent_type") == "function_response"
-
-    def is_long_running(self) -> bool:
-        return bool(self.metadata.get("kagent_is_long_running"))
+        return self.kagent_type() == "function_response"
 
     def is_partial(self) -> bool | None:
         """ADK streaming flag: True = streaming fragment, False = aggregated

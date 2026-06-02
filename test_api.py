@@ -19,6 +19,7 @@ from conftest import (
     completed_event,
     failed_event,
     sse_response,
+    tool_call_event,
     working_event,
 )
 from kagent_a2a_proxy import hitl
@@ -173,6 +174,41 @@ def test_streaming_thought_goes_to_reasoning():
     assert "let me think" in body
     assert '"content":"the answer"' in body
     assert body.count("the answer") == 1
+
+
+@respx.mock
+def test_streaming_tool_call_renders_in_reasoning():
+    # Real kagent shape: kagent_type on the data part, not the event.
+    events = [
+        working_event("Looking up agents ", partial=True),
+        tool_call_event("list_agents"),
+        working_event("done.", partial=True),
+        completed_event(),
+    ]
+    respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response(events),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [{"role": "user", "content": "list agents"}],
+            "stream": True,
+        },
+    ) as r:
+        assert r.status_code == 200
+        body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
+
+    # Tool call shows in the Thinking pane; the prose stays in the reply.
+    assert '"reasoning_content":"' in body
+    assert "list_agents" in body
+    assert '"content":"Looking up agents "' in body
 
 
 @respx.mock

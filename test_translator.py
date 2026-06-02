@@ -16,7 +16,7 @@ kagent's A2A stream uses the pre-v1.0 protocol shape:
 
 import pytest
 
-from conftest import working_event
+from conftest import tool_call_event, tool_response_event, working_event
 from kagent_a2a_proxy.translator import event_to_chunks, parse_sse_line
 
 # ---------------------------------------------------------------------------
@@ -110,7 +110,15 @@ def test_working_text_routing(event: dict, channel: str, expected: str):
                 },
                 "metadata": {"kagent_type": "function_response"},
             },
-            id="function-response-dropped",
+            id="function-response-dropped-event-level",
+        ),
+        pytest.param(
+            tool_response_event("list_agents"),
+            id="function-response-dropped-part-level",
+        ),
+        pytest.param(
+            tool_call_event("adk_request_confirmation", long_running=True),
+            id="confirmation-request-not-rendered",
         ),
     ],
 )
@@ -149,6 +157,19 @@ def test_tool_call_renders_as_structured_block(args: dict, expected: list[str]):
     assert reasoning is not None
     assert all(fragment in reasoning for fragment in expected)
     assert chunks[0].choices[0].delta.content is None
+
+
+def test_tool_call_detected_from_part_metadata():
+    # Real kagent streams carry kagent_type on the data part, not the event.
+    event = tool_call_event("list_agents", args={"limit": 5})
+    reasoning = (
+        next(iter(event_to_chunks(event, "agent-one")))
+        .choices[0]
+        .delta.reasoning_content
+    )
+    assert reasoning is not None
+    assert "> 🔧 **list_agents**" in reasoning
+    assert "limit=5" in reasoning
 
 
 # ---------------------------------------------------------------------------

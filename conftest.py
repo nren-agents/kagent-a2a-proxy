@@ -71,6 +71,40 @@ def failed_event(detail: str = "") -> dict:
     return {"kind": "status-update", "final": True, "status": status, "metadata": {}}
 
 
+def tool_call_event(
+    name: str, args: dict | None = None, long_running: bool = False
+) -> dict:
+    """A working-state function-call event in kagent's real shape — `kagent_type`
+    on the data *part* metadata, not the event metadata."""
+    part_meta: dict = {"kagent_type": "function_call"}
+    if long_running:
+        part_meta["kagent_is_long_running"] = True
+    part = {
+        "kind": "data",
+        "data": {"name": name, "args": args or {}},
+        "metadata": part_meta,
+    }
+    return {
+        "kind": "status-update",
+        "status": {"state": "working", "message": {"role": "agent", "parts": [part]}},
+        "metadata": {},
+    }
+
+
+def tool_response_event(name: str) -> dict:
+    """A working-state function-response event (part-level `kagent_type`)."""
+    part = {
+        "kind": "data",
+        "data": {"name": name, "response": {}},
+        "metadata": {"kagent_type": "function_response"},
+    }
+    return {
+        "kind": "status-update",
+        "status": {"state": "working", "message": {"role": "agent", "parts": [part]}},
+        "metadata": {},
+    }
+
+
 def artifact_event(text: str) -> dict:
     return {
         "kind": "artifact-update",

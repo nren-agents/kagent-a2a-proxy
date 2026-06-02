@@ -44,7 +44,7 @@ A stateless proxy that makes [kagent](https://kagent.dev) agents look like OpenA
 kagent uses the **pre-v1.0** A2A shape, which the models in `models.py` and `translator.parse_sse_line` are written against — do not "modernize" these to current A2A spec:
 - Each SSE line is wrapped in a **JSON-RPC 2.0 envelope** (`{"jsonrpc","id","result"|"error"}`); `parse_sse_line` unwraps `result` and drops errors/non-events.
 - Message/artifact **parts discriminate on `kind`** (`"text"`/`"data"`), not `type`.
-- Tool-call metadata lives in event `metadata` (`kagent_type == "function_call"`, `kagent_is_long_running`).
+- Tool-call metadata lives on the **data part's** `metadata` (`kagent_type` = `function_call`/`function_response`, `kagent_is_long_running`), *not* the event metadata — verified against live streams. `A2ATaskStatusUpdateEvent.kagent_type()` checks the part first and falls back to the event metadata (the shape some synthetic fixtures use). The `adk_request_confirmation` pseudo-tool is suppressed in the working/tool branch — it surfaces only via the `input-required` approval prompt.
 
 ### Configuration
 
