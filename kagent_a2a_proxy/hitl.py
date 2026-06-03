@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import re
 from hashlib import sha256
 from typing import Any
 
@@ -60,18 +61,28 @@ def _decode_zw(content: str) -> str:
     return decoded.decode("utf-8", errors="ignore")
 
 
-def encode_marker(task_id: str, context_id: str, secret: str | None) -> str:
+def encode_marker(
+    task_id: str,
+    context_id: str,
+    secret: str | None,
+    questions: list[dict[str, Any]] | None = None,
+) -> str:
     """Return a signed, invisible (zero-width) marker, or '' when disabled.
 
     Disabled (returns '') when no secret is configured or there's no task to
-    resume — callers then emit an informational-only approval prompt.
+    resume — callers then emit an informational-only prompt.
+
+    When ``questions`` is given (an ``ask_user`` prompt), the normalized
+    question structure is embedded too, so the stateless next turn can map the
+    user's reply (numbers / labels / free text) back to ``ask_user_answers``.
     """
     if not secret or not task_id:
         return ""
+    body_obj: dict[str, Any] = {"t": task_id, "c": context_id}
+    if questions:
+        body_obj["q"] = questions
     payload = (
-        base64.urlsafe_b64encode(json.dumps({"t": task_id, "c": context_id}).encode())
-        .decode()
-        .rstrip("=")
+        base64.urlsafe_b64encode(json.dumps(body_obj).encode()).decode().rstrip("=")
     )
     body = f"{_MARKER_VERSION}:{payload}:{_sign(payload, secret)}"
     return _encode_zw(body)
@@ -79,11 +90,12 @@ def encode_marker(task_id: str, context_id: str, secret: str | None) -> str:
 
 def extract_pending(
     messages: list[dict[str, Any]], secret: str | None
-) -> dict[str, str] | None:
-    """Recover ``{task_id, context_id}`` from the latest assistant marker.
+) -> dict[str, Any] | None:
+    """Recover the paused task from the latest assistant marker.
 
-    Returns None when HITL is disabled, no assistant marker is present, or the
-    signature doesn't verify (tampered / forged).
+    Returns ``{task_id, context_id}`` (plus ``questions`` for an ``ask_user``
+    prompt), or None when HITL is disabled, no assistant marker is present, or
+    the signature doesn't verify (tampered / forged).
     """
     if not secret:
         return None
@@ -103,7 +115,14 @@ def extract_pending(
     task_id = data.get("t")
     if not task_id:
         return None
-    return {"task_id": str(task_id), "context_id": str(data.get("c", ""))}
+    pending: dict[str, Any] = {
+        "task_id": str(task_id),
+        "context_id": str(data.get("c", "")),
+    }
+    questions = data.get("q")
+    if isinstance(questions, list):
+        pending["questions"] = questions
+    return pending
 
 
 def _decode_payload(payload_b64: str) -> dict[str, Any]:
@@ -124,3 +143,56 @@ def classify_decision(text: str) -> str | None:
     if first in _REJECT_WORDS:
         return "reject"
     return None
+
+
+def parse_ask_user_reply(
+    text: str, questions: list[dict[str, Any]]
+) -> list[dict[str, Any]] | None:
+    """Parse a free-text reply into kagent's positional ``ask_user_answers``.
+
+    Returns a list of ``{"answer": [labels...]}`` aligned 1:1 with ``questions``,
+    or None when the reply can't be mapped (empty, or — for a multi-question
+    batch — the number of answer lines doesn't match the number of questions),
+    so the caller can re-prompt.
+
+    A single question consumes the whole reply. A multi-question batch expects
+    one answer per line, in order.
+    """
+    text = text.strip()
+    if not text or not questions:
+        return None
+    if len(questions) == 1:
+        return [{"answer": _resolve_answer(text, questions[0])}]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) != len(questions):
+        return None
+    return [
+        {"answer": _resolve_answer(line, q)}
+        for line, q in zip(lines, questions, strict=True)
+    ]
+
+
+def _resolve_answer(text: str, question: dict[str, Any]) -> list[str]:
+    """Resolve one reply segment into the chosen label(s) for one question."""
+    choices = question.get("choices") or []
+    text = text.strip()
+    if not choices:
+        # Free-text question: the whole segment is the answer.
+        return [text] if text else []
+    if question.get("multiple"):
+        tokens = [t.strip() for t in re.split(r"[,\n]", text) if t.strip()]
+        return [_resolve_token(t, choices) for t in tokens]
+    return [_resolve_token(text, choices)]
+
+
+def _resolve_token(token: str, choices: list[str]) -> str:
+    """Map one token to a choice by 1-based index or case-insensitive label,
+    falling back to the raw token as free text."""
+    if token.isdigit():
+        index = int(token)
+        if 1 <= index <= len(choices):
+            return choices[index - 1]
+    for choice in choices:
+        if choice.lower() == token.lower():
+            return choice
+    return token

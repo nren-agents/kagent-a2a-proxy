@@ -149,10 +149,14 @@ async def translate_resume(
     context_id: str,
     decision: str,
     rejection_reason: str = "",
+    ask_user_answers: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[ChatCompletionChunk]:
-    """Resume a paused task with an approve/reject decision, as OpenAI chunks."""
+    """Resume a paused task with a decision (or ask_user answers), as OpenAI chunks."""
     async for chunk in _translate_lines(
-        resume_stream(model, task_id, context_id, decision, rejection_reason), model
+        resume_stream(
+            model, task_id, context_id, decision, rejection_reason, ask_user_answers
+        ),
+        model,
     ):
         yield chunk
 

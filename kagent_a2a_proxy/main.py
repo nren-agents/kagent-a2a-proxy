@@ -32,6 +32,7 @@ from .models import (
     ModelObject,
     StreamChoice,
 )
+from .translator import render_ask_user
 
 logging.basicConfig(
     level=settings.log_level.upper(),
@@ -59,7 +60,7 @@ app = FastAPI(
         "OpenAI-compatible streaming chat completions and MCP server"
         " backed by kagent A2A"
     ),
-    version="0.0.2",
+    version="0.0.3",
     lifespan=lifespan,
 )
 
@@ -135,20 +136,49 @@ def _select_chunks(
     messages: list[dict[str, Any]],
     session_id: str,
 ) -> AsyncIterator[ChatCompletionChunk]:
-    """Pick the chunk source: resume a pending HITL approval if the user's reply
-    is a clear approve/deny, re-prompt if it's ambiguous, else a fresh call."""
+    """Pick the chunk source. With a pending HITL prompt, resume it: an ``ask_user``
+    prompt maps the reply to positional answers; a tool approval keys off a clear
+    approve/deny. An unmappable reply re-prompts; no pending prompt is a fresh call."""
     pending = hitl.extract_pending(messages, settings.hitl_secret)
     if pending is None:
         return translate_stream(model, messages, session_id)
-    decision = hitl.classify_decision(_last_user_text(messages))
+    user_text = _last_user_text(messages)
+    questions = pending.get("questions")
+    if questions:
+        answers = hitl.parse_ask_user_reply(user_text, questions)
+        if answers is None:
+            return _clarify_ask_user_chunks(model, pending)
+        return translate_resume(
+            model,
+            pending["task_id"],
+            pending["context_id"],
+            "approve",
+            ask_user_answers=answers,
+        )
+    decision = hitl.classify_decision(user_text)
     if decision is None:
         return _clarify_chunks(model, pending)
     return translate_resume(model, pending["task_id"], pending["context_id"], decision)
 
 
-async def _clarify_chunks(
+def _stop_chunks(model: str, text: str) -> AsyncIterator[ChatCompletionChunk]:
+    """A two-chunk stream: one content delta, then finish_reason=stop."""
+
+    async def gen() -> AsyncIterator[ChatCompletionChunk]:
+        yield ChatCompletionChunk(
+            model=model, choices=[StreamChoice(delta=DeltaContent(content=text))]
+        )
+        yield ChatCompletionChunk(
+            model=model,
+            choices=[StreamChoice(delta=DeltaContent(), finish_reason="stop")],
+        )
+
+    return gen()
+
+
+def _clarify_chunks(
     model: str,
-    pending: dict[str, str],
+    pending: dict[str, Any],
 ) -> AsyncIterator[ChatCompletionChunk]:
     """Re-prompt for an ambiguous reply, re-embedding the marker so the pending
     approval survives to the next turn."""
@@ -159,12 +189,21 @@ async def _clarify_chunks(
         "\n⚠️ There's a pending approval. Please reply **approve** or **deny** "
         f"to continue.\n{marker}"
     )
-    yield ChatCompletionChunk(
-        model=model, choices=[StreamChoice(delta=DeltaContent(content=text))]
+    return _stop_chunks(model, text)
+
+
+def _clarify_ask_user_chunks(
+    model: str,
+    pending: dict[str, Any],
+) -> AsyncIterator[ChatCompletionChunk]:
+    """Re-render the ask_user questions when the reply couldn't be mapped,
+    re-embedding the question-carrying marker so the prompt survives the turn."""
+    questions = pending["questions"]
+    marker = hitl.encode_marker(
+        pending["task_id"], pending["context_id"], settings.hitl_secret, questions
     )
-    yield ChatCompletionChunk(
-        model=model, choices=[StreamChoice(delta=DeltaContent(), finish_reason="stop")]
-    )
+    note = "\n⚠️ I couldn't match your reply to the question(s). Please try again:\n"
+    return _stop_chunks(model, note + render_ask_user(questions, marker))
 
 
 async def _stream_response(

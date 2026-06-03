@@ -85,3 +85,88 @@ def test_no_marker_returns_none():
 )
 def test_classify_decision(text: str, expected: str | None):
     assert hitl.classify_decision(text) == expected
+
+
+# ---------------------------------------------------------------------------
+# ask_user — the marker carries the question structure, and the user's reply
+# is parsed into the positional ask_user_answers list kagent expects.
+# ---------------------------------------------------------------------------
+
+_DB_Q = {
+    "question": "Which database?",
+    "choices": ["PostgreSQL", "MySQL", "SQLite"],
+    "multiple": False,
+}
+_FEATURES_Q = {
+    "question": "Which features?",
+    "choices": ["Auth", "Logging", "Caching"],
+    "multiple": True,
+}
+_FREETEXT_Q = {"question": "Anything else?", "choices": [], "multiple": False}
+
+
+def test_marker_round_trip_carries_ask_user_questions():
+    questions = [_DB_Q]
+    marker = hitl.encode_marker("task-1", "ctx-1", SECRET, questions)
+    assert all(ch in ("\u200b", "\u200c") for ch in marker)  # still invisible
+    messages = _messages(("assistant", "❓ Which database?" + marker))
+    assert hitl.extract_pending(messages, SECRET) == {
+        "task_id": "task-1",
+        "context_id": "ctx-1",
+        "questions": questions,
+    }
+
+
+def test_marker_without_questions_omits_questions_key():
+    marker = hitl.encode_marker("task-1", "ctx-1", SECRET)
+    pending = hitl.extract_pending(_messages(("assistant", "x" + marker)), SECRET)
+    assert pending == {"task_id": "task-1", "context_id": "ctx-1"}
+
+
+def test_parse_single_select_by_number():
+    assert hitl.parse_ask_user_reply("2", [_DB_Q]) == [{"answer": ["MySQL"]}]
+
+
+def test_parse_single_select_by_label_case_insensitive():
+    assert hitl.parse_ask_user_reply("postgresql", [_DB_Q]) == [
+        {"answer": ["PostgreSQL"]}
+    ]
+
+
+def test_parse_single_select_free_text_passthrough():
+    assert hitl.parse_ask_user_reply("CockroachDB", [_DB_Q]) == [
+        {"answer": ["CockroachDB"]}
+    ]
+
+
+def test_parse_free_text_question_returns_whole_reply():
+    assert hitl.parse_ask_user_reply("add rate limiting", [_FREETEXT_Q]) == [
+        {"answer": ["add rate limiting"]}
+    ]
+
+
+def test_parse_multi_select_numbers():
+    assert hitl.parse_ask_user_reply("1,3", [_FEATURES_Q]) == [
+        {"answer": ["Auth", "Caching"]}
+    ]
+
+
+def test_parse_multi_select_mixes_number_and_label():
+    assert hitl.parse_ask_user_reply("auth, 3", [_FEATURES_Q]) == [
+        {"answer": ["Auth", "Caching"]}
+    ]
+
+
+def test_parse_multi_question_one_answer_per_line():
+    assert hitl.parse_ask_user_reply("1\n1,3", [_DB_Q, _FEATURES_Q]) == [
+        {"answer": ["PostgreSQL"]},
+        {"answer": ["Auth", "Caching"]},
+    ]
+
+
+def test_parse_multi_question_count_mismatch_returns_none():
+    assert hitl.parse_ask_user_reply("just one line", [_DB_Q, _FEATURES_Q]) is None
+
+
+def test_parse_empty_reply_returns_none():
+    assert hitl.parse_ask_user_reply("   ", [_DB_Q]) is None

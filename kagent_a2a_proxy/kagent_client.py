@@ -93,18 +93,23 @@ def _build_decision_payload(
     context_id: str,
     decision: str,
     rejection_reason: str = "",
+    ask_user_answers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the A2A message/stream payload that resumes a paused (input-required)
     task with a human-in-the-loop decision.
 
     Mirrors kagent's own client (`_remote_a2a_tool` / `_hitl_utils`): the decision
     rides a DataPart, and the paused task is referenced by taskId + contextId on
-    the message itself. NOTE: the exact wire shape is inferred from kagent source
-    and should be validated against a live kagent before relying on it.
+    the message itself. For the built-in ``ask_user`` tool, kagent expects an
+    ``approve`` decision carrying the positional ``ask_user_answers`` list. NOTE:
+    the exact wire shape is inferred from kagent source and should be validated
+    against a live kagent before relying on it.
     """
     data: dict[str, Any] = {"decision_type": decision}
     if decision == "reject" and rejection_reason:
         data["rejection_reason"] = rejection_reason
+    if ask_user_answers is not None:
+        data["ask_user_answers"] = ask_user_answers
     message: dict[str, Any] = {
         "role": "user",
         "taskId": task_id,
@@ -182,11 +187,15 @@ async def resume_stream(
     context_id: str,
     decision: str,
     rejection_reason: str = "",
+    ask_user_answers: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[str]:
-    """Resume a paused (input-required) task with an approve/reject decision."""
+    """Resume a paused (input-required) task with a decision (approve/reject) or,
+    for ``ask_user``, an ``approve`` carrying the positional answers."""
     agent_name = _resolve_agent(model)
     url = _a2a_url(agent_name)
-    payload = _build_decision_payload(task_id, context_id, decision, rejection_reason)
+    payload = _build_decision_payload(
+        task_id, context_id, decision, rejection_reason, ask_user_answers
+    )
 
     logger.info(
         "Resuming agent=%s task=%s decision=%s url=%s",

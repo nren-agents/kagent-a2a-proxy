@@ -359,6 +359,100 @@ def test_approval_embeds_signed_marker_when_secret_set(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# event_to_chunks — ask_user prompts render selectable choices, not approve/deny
+# ---------------------------------------------------------------------------
+
+
+def _ask_user_event(questions: list[dict]) -> dict:
+    """An input-required event whose confirmation wraps an ask_user call."""
+    return {
+        "kind": "status-update",
+        "taskId": "t-au",
+        "contextId": "c-au",
+        "status": {
+            "state": "input-required",
+            "message": {
+                "role": "agent",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "name": "adk_request_confirmation",
+                            "args": {
+                                "originalFunctionCall": {
+                                    "name": "ask_user",
+                                    "args": {"questions": questions},
+                                },
+                                "toolConfirmation": {
+                                    "hint": "; ".join(q["question"] for q in questions),
+                                    "confirmed": False,
+                                },
+                            },
+                        },
+                    }
+                ],
+            },
+        },
+        "metadata": {"kagent_type": "function_call", "kagent_is_long_running": True},
+    }
+
+
+def test_ask_user_single_question_renders_numbered_choices():
+    event = _ask_user_event(
+        [
+            {
+                "question": "Which database should I use?",
+                "choices": ["PostgreSQL", "MySQL", "SQLite"],
+                "multiple": False,
+            }
+        ]
+    )
+    content = next(iter(event_to_chunks(event, "agent-one"))).choices[0].delta.content
+    assert "Which database should I use?" in content
+    assert "1. PostgreSQL" in content
+    assert "2. MySQL" in content
+    assert "3. SQLite" in content
+    # An ask_user prompt is NOT a yes/no approval gate.
+    assert "Approval required" not in content
+    assert "approve" not in content.lower()
+
+
+def test_ask_user_multiselect_hint_and_marker(monkeypatch):
+    from kagent_a2a_proxy import hitl
+    from kagent_a2a_proxy.config import settings
+
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    questions = [
+        {
+            "question": "Which database?",
+            "choices": ["PostgreSQL", "MySQL"],
+            "multiple": False,
+        },
+        {
+            "question": "Which features?",
+            "choices": ["Auth", "Logging", "Caching"],
+            "multiple": True,
+        },
+    ]
+    content = (
+        next(iter(event_to_chunks(_ask_user_event(questions), "agent-one")))
+        .choices[0]
+        .delta.content
+    )
+    # Both questions render with their own numbered choices.
+    assert "Which database?" in content
+    assert "Which features?" in content
+    assert "select all" in content.lower()  # multi-select affordance
+    # The marker round-trips the question structure for the resume turn.
+    pending = hitl.extract_pending(
+        [{"role": "assistant", "content": content}], "s3cr3t"
+    )
+    assert pending is not None
+    assert pending["task_id"] == "t-au"
+    assert pending["questions"] == questions
+
+
+# ---------------------------------------------------------------------------
 # event_to_chunks — completed status-update emits only finish_reason
 # ---------------------------------------------------------------------------
 

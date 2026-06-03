@@ -368,6 +368,93 @@ def test_ambiguous_reply_reprompts_without_calling_kagent(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# /v1/chat/completions — ask_user resume (answers, not approve/deny)
+# ---------------------------------------------------------------------------
+
+_DB_Q = {
+    "question": "Which database?",
+    "choices": ["PostgreSQL", "MySQL", "SQLite"],
+    "multiple": False,
+}
+_FEATURES_Q = {
+    "question": "Which features?",
+    "choices": ["Auth", "Logging", "Caching"],
+    "multiple": True,
+}
+
+
+def _ask_user_history(marker: str, reply: str) -> list[dict]:
+    return [
+        {"role": "user", "content": "set up a service"},
+        {"role": "assistant", "content": "❓ Which database?" + marker},
+        {"role": "user", "content": reply},
+    ]
+
+
+@respx.mock
+def test_ask_user_reply_resumes_with_answers(monkeypatch):
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    marker = hitl.encode_marker("task-au", "ctx-au", "s3cr3t", [_DB_Q])
+    route = respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response([artifact_event("Using MySQL."), completed_event()]),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": _ask_user_history(marker, "2"),
+            "stream": True,
+        },
+    ) as r:
+        assert r.status_code == 200
+        body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
+
+    assert route.called
+    sent = json.loads(route.calls.last.request.content)
+    message = sent["params"]["message"]
+    assert message["taskId"] == "task-au"
+    assert message["contextId"] == "ctx-au"
+    data = message["parts"][0]["data"]
+    # ask_user resumes as an approval carrying the positional answers.
+    assert data["decision_type"] == "approve"
+    assert data["ask_user_answers"] == [{"answer": ["MySQL"]}]
+    assert "Using MySQL." in body
+
+
+@respx.mock
+def test_ask_user_unparseable_reply_reprompts_without_calling_kagent(monkeypatch):
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    marker = hitl.encode_marker("task-au", "ctx-au", "s3cr3t", [_DB_Q, _FEATURES_Q])
+    route = respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200, content=b"", headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            # one line for a two-question batch → can't map → re-prompt
+            "messages": _ask_user_history(marker, "just one answer"),
+            "stream": True,
+        },
+    ) as r:
+        assert r.status_code == 200
+        body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
+
+    assert not route.called
+    assert "Which database?" in body  # the questions are re-rendered
+
+
+# ---------------------------------------------------------------------------
 # /v1/chat/completions — kagent 503 error
 # ---------------------------------------------------------------------------
 

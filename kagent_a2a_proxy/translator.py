@@ -247,10 +247,19 @@ def _terminal_notice(state: str, message: A2AMessage | None) -> str:
 def _input_required_text(event: A2ATaskStatusUpdateEvent) -> str:
     """Render the user-facing prompt for an input-required event.
 
-    A long-running tool confirmation becomes an approval prompt naming the
-    underlying tool; any other input-required message falls back to its text.
+    The built-in ``ask_user`` tool becomes a question prompt listing its
+    predefined choices; any other long-running confirmation becomes an approval
+    prompt naming the underlying tool; anything else falls back to its text.
     """
     message = event.status.message
+    original = _original_function_call(message)
+    if original is not None and original.get("name") == "ask_user":
+        questions = _ask_user_questions(original)
+        if questions:
+            marker = encode_marker(
+                event.taskId, event.contextId, settings.hitl_secret, questions
+            )
+            return render_ask_user(questions, marker)
     tool, hint = _approval_request(message)
     if tool or hint:
         target = f" for `{tool}`" if tool else ""
@@ -276,6 +285,84 @@ def _approval_request(message: A2AMessage | None) -> tuple[str, str]:
     name = original.get("name", "") if isinstance(original, dict) else ""
     hint = confirmation.get("hint", "") if isinstance(confirmation, dict) else ""
     return name, hint
+
+
+def _original_function_call(message: A2AMessage | None) -> dict[str, Any] | None:
+    """Return the ``originalFunctionCall`` wrapped inside an
+    ``adk_request_confirmation`` data part, if present."""
+    call = _function_call(message)
+    args = call.get("args") if call else None
+    if not isinstance(args, dict):
+        return None
+    original = args.get("originalFunctionCall")
+    return original if isinstance(original, dict) else None
+
+
+def _ask_user_questions(original: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize the ``ask_user`` questions list to ``{question, choices,
+    multiple}`` dicts, dropping any entry without question text."""
+    args = original.get("args")
+    raw = args.get("questions") if isinstance(args, dict) else None
+    items = raw if isinstance(raw, list) else []
+    return [q for q in map(_normalize_question, items) if q is not None]
+
+
+def _normalize_question(item: Any) -> dict[str, Any] | None:
+    """Coerce one raw ask_user question into the normalized shape, or None."""
+    if not isinstance(item, dict):
+        return None
+    text = str(item.get("question", "")).strip()
+    if not text:
+        return None
+    raw_choices = item.get("choices")
+    choices = [str(c) for c in raw_choices] if isinstance(raw_choices, list) else []
+    return {
+        "question": text,
+        "choices": choices,
+        "multiple": bool(item.get("multiple", False)),
+    }
+
+
+def render_ask_user(questions: list[dict[str, Any]], marker: str) -> str:
+    """Render ask_user questions as visible, numbered Markdown + the resume marker.
+
+    Shared by the initial input-required prompt and main's re-prompt on an
+    unparseable reply, so both render identically.
+
+    A single question gets a compact numbered list; a batch numbers each question
+    and asks for one answer per line. The marker (empty when HITL is disabled)
+    carries the question structure so the next reply can be mapped to answers.
+    """
+    if len(questions) == 1:
+        body = _render_one_question(questions[0])
+    else:
+        body = _render_question_batch(questions)
+    return f"{body}\n{marker}"
+
+
+def _render_one_question(question: dict[str, Any]) -> str:
+    lines = [f"\n❓ {question['question']}"]
+    lines += [f"{i}. {choice}" for i, choice in enumerate(question["choices"], 1)]
+    if question["choices"]:
+        lines += ["", _select_hint(question["multiple"])]
+    return "\n".join(lines)
+
+
+def _render_question_batch(questions: list[dict[str, Any]]) -> str:
+    lines = ["\nThe agent needs a few answers to continue:\n"]
+    for qi, question in enumerate(questions, 1):
+        suffix = " _(select all that apply)_" if question["multiple"] else ""
+        lines.append(f"**{qi}.** {question['question']}{suffix}")
+        lines += [f"{i}. {choice}" for i, choice in enumerate(question["choices"], 1)]
+        lines.append("")
+    lines.append("_Answer each question on its own line, in order._")
+    return "\n".join(lines)
+
+
+def _select_hint(multiple: bool) -> str:
+    if multiple:
+        return "_Reply with the numbers (e.g. `1,3`), the option text, or your own answer._"
+    return "_Reply with the number, the option text, or your own answer._"
 
 
 def _function_call(message: A2AMessage | None) -> dict[str, Any] | None:
