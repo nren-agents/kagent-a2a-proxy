@@ -220,6 +220,11 @@ def test_deemphasize_narration_aggregate_splits_blockquote_and_tool(
             ["> 🔧 **influxdb_query**", '> `range="1h", limit=5`'],
             id="with-args",
         ),
+        pytest.param(
+            {"request": "x" * 300},
+            ["> 🔧 **influxdb_query**", f'> `request="{"x" * 300}"`'],
+            id="long-args-not-truncated",
+        ),
     ],
 )
 def test_tool_call_renders_as_structured_block(args: dict, expected: list[str]):

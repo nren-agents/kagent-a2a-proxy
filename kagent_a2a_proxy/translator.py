@@ -28,10 +28,6 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-# Upper bound on the rendered tool-args string in the "thinking" pane, so a
-# large argument payload can't re-clutter what we're trying to declutter.
-_MAX_ARGS_LEN = 160
-
 
 def parse_sse_line(line: str) -> dict[str, Any] | None:
     """
@@ -420,13 +416,10 @@ def _tool_call_text(name: str, args: str) -> str:
 
 
 def _format_tool_args(args: Any) -> str:
-    """Render tool-call args as a compact, truncated `key=value` list."""
+    """Render tool-call args as a compact `key=value` list."""
     if not isinstance(args, dict) or not args:
         return ""
-    rendered = ", ".join(f"{k}={_arg_value(v)}" for k, v in args.items())
-    if len(rendered) <= _MAX_ARGS_LEN:
-        return rendered
-    return rendered[: _MAX_ARGS_LEN - 1] + "…"
+    return ", ".join(f"{k}={_arg_value(v)}" for k, v in args.items())
 
 
 def _arg_value(value: Any) -> str:
