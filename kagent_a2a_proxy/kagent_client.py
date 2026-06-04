@@ -81,6 +81,7 @@ def _build_payload(messages: list[dict[str, Any]], session_id: str) -> dict[str,
         "params": {
             "sessionId": session_id,
             "message": {
+                "messageId": str(uuid.uuid4()),
                 "role": "user",
                 "parts": parts,
             },
@@ -104,6 +105,10 @@ def _build_decision_payload(
     ``approve`` decision carrying the positional ``ask_user_answers`` list. NOTE:
     the exact wire shape is inferred from kagent source and should be validated
     against a live kagent before relying on it.
+
+    The ``messageId`` must be unique: kagent's a2a-go server dedups task history
+    on it, so a repeated (or empty) id is treated as a retry and the resume
+    decision is silently dropped — leaving the paused tool call un-answered.
     """
     data: dict[str, Any] = {"decision_type": decision}
     if decision == "reject" and rejection_reason:
@@ -111,6 +116,7 @@ def _build_decision_payload(
     if ask_user_answers is not None:
         data["ask_user_answers"] = ask_user_answers
     message: dict[str, Any] = {
+        "messageId": str(uuid.uuid4()),
         "role": "user",
         "taskId": task_id,
         "contextId": context_id,

@@ -335,6 +335,7 @@ def test_approve_reply_resumes_paused_task(monkeypatch):
     message = sent["params"]["message"]
     assert message["taskId"] == "task-7"
     assert message["contextId"] == "ctx-7"
+    assert message["messageId"]  # unique id so a2a-go doesn't dedup the resume
     assert message["parts"][0]["data"]["decision_type"] == "approve"
     # The resumed answer streams back to the reply.
     assert "Restarted" in body
