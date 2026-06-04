@@ -260,31 +260,63 @@ def _input_required_text(event: A2ATaskStatusUpdateEvent) -> str:
                 event.taskId, event.contextId, settings.hitl_secret, questions
             )
             return render_ask_user(questions, marker)
-    tool, hint = _approval_request(message)
-    if tool or hint:
-        target = f" for `{tool}`" if tool else ""
-        suffix = f": {hint}" if hint else ""
+    approvals = _approval_requests(message)
+    if approvals:
         # When HITL is enabled, embed a signed marker so the user's next
         # "approve"/"deny" reply can be routed back to this paused task.
         marker = encode_marker(event.taskId, event.contextId, settings.hitl_secret)
-        instruction = " — reply **approve** or **deny** to continue" if marker else ""
-        return f"\n⚠️ Approval required{target}{suffix}{instruction}\n{marker}"
+        return _render_approval_prompt(approvals, marker)
     text = message.text() if message else ""
     return f"\n> ❓ {text}\n" if text else ""
 
 
-def _approval_request(message: A2AMessage | None) -> tuple[str, str]:
-    """Pull (underlying tool name, confirmation hint) out of a tool-confirmation
-    message, or ("", "") when this is not an approval request."""
-    call = _function_call(message)
-    args = call.get("args") if call else None
+def _approval_requests(message: A2AMessage | None) -> list[tuple[str, str]]:
+    """(underlying tool name, confirmation hint) for every tool-confirmation part.
+
+    The agent can fire several approval-required tools in one turn (parallel
+    function calls), so each pending confirmation rides its own data part — not
+    just the first."""
+    return [
+        approval
+        for call in _function_calls(message)
+        if (approval := _approval_from_call(call)) is not None
+    ]
+
+
+def _approval_from_call(call: dict[str, Any]) -> tuple[str, str] | None:
+    """Pull (tool name, hint) from one confirmation call, or None when it isn't one."""
+    args = call.get("args")
     if not isinstance(args, dict):
-        return "", ""
+        return None
     original = args.get("originalFunctionCall")
     confirmation = args.get("toolConfirmation")
     name = original.get("name", "") if isinstance(original, dict) else ""
     hint = confirmation.get("hint", "") if isinstance(confirmation, dict) else ""
+    if not name and not hint:
+        return None
     return name, hint
+
+
+def _render_approval_prompt(approvals: list[tuple[str, str]], marker: str) -> str:
+    """Render one or more pending tool approvals as a single visible prompt.
+
+    A uniform approve/deny resume covers every pending call, so all of them are
+    surfaced under one instruction rather than only the first."""
+    instruction = " — reply **approve** or **deny** to continue" if marker else ""
+    if len(approvals) == 1:
+        name, hint = approvals[0]
+        target = f" for `{name}`" if name else ""
+        suffix = f": {hint}" if hint else ""
+        return f"\n⚠️ Approval required{target}{suffix}{instruction}\n{marker}"
+    header = f"\n⚠️ Approval required for {len(approvals)} tool calls{instruction}:"
+    items = "\n".join(_approval_line(name, hint) for name, hint in approvals)
+    return f"{header}\n{items}\n{marker}"
+
+
+def _approval_line(name: str, hint: str) -> str:
+    label = f"`{name}`" if name else "tool"
+    suffix = f": {hint}" if hint else ""
+    return f"- {label}{suffix}"
 
 
 def _original_function_call(message: A2AMessage | None) -> dict[str, Any] | None:
@@ -365,18 +397,20 @@ def _select_hint(multiple: bool) -> str:
     return "_Reply with the number, the option text, or your own answer._"
 
 
+def _function_calls(message: A2AMessage | None) -> list[dict[str, Any]]:
+    """Every data part's dict payload (kagent function calls), in order."""
+    if message is None:
+        return []
+    return [
+        part.data
+        for part in message.parts
+        if isinstance(part, A2ADataPart) and isinstance(part.data, dict)
+    ]
+
+
 def _function_call(message: A2AMessage | None) -> dict[str, Any] | None:
     """Return the first data part's dict payload (a kagent function call), if any."""
-    if message is None:
-        return None
-    return next(
-        (
-            part.data
-            for part in message.parts
-            if isinstance(part, A2ADataPart) and isinstance(part.data, dict)
-        ),
-        None,
-    )
+    return next(iter(_function_calls(message)), None)
 
 
 def _tool_call_text(name: str, args: str) -> str:

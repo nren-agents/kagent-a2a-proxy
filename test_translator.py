@@ -300,6 +300,42 @@ def test_hitl_approval_request_goes_to_content():
     assert "Restart router spine-01?" in delta.content
 
 
+def test_hitl_parallel_approvals_list_every_pending_tool():
+    """Parallel approval-required calls produce ONE prompt naming all of them,
+    not just the first part (a uniform approve/deny still covers them all)."""
+
+    def _confirmation(tool: str, hint: str) -> dict:
+        return {
+            "kind": "data",
+            "data": {
+                "name": "adk_request_confirmation",
+                "args": {
+                    "originalFunctionCall": {"name": tool},
+                    "toolConfirmation": {"hint": hint, "confirmed": False},
+                },
+            },
+        }
+
+    event = {
+        "kind": "status-update",
+        "status": {
+            "state": "input-required",
+            "message": {
+                "role": "assistant",
+                "parts": [
+                    _confirmation("restart_router", "Restart spine-01?"),
+                    _confirmation("delete_file", "Delete /etc/hosts?"),
+                ],
+            },
+        },
+        "metadata": {"kagent_type": "function_call", "kagent_is_long_running": True},
+    }
+    content = next(iter(event_to_chunks(event, "agent-one"))).choices[0].delta.content
+    assert content.count("Approval required") == 1  # a single combined prompt
+    assert "restart_router" in content and "delete_file" in content
+    assert "Restart spine-01?" in content and "Delete /etc/hosts?" in content
+
+
 def test_free_text_input_required_goes_to_content():
     event = {
         "kind": "status-update",
