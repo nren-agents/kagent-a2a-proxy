@@ -34,6 +34,9 @@ async def aclose() -> None:
 
 
 def _a2a_url(agent_name: str) -> str:
+    # Direct-URL override (local dev against a BYO a2a-sdk agent at its root).
+    if direct := settings.agent_urls.get(agent_name):
+        return direct
     base = str(settings.kagent_base_url).rstrip("/")
     return f"{base}/api/a2a/{settings.kagent_namespace}/{agent_name}"
 

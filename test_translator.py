@@ -498,35 +498,28 @@ def test_ask_user_multiselect_hint_and_marker(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "event",
-    [
-        pytest.param(
-            {"kind": "status-update", "status": {"state": "completed"}, "metadata": {}},
-            id="no-message",
-        ),
-        pytest.param(
-            {
-                "kind": "status-update",
-                "status": {
-                    "state": "completed",
-                    "message": {
-                        "role": "assistant",
-                        "parts": [{"kind": "text", "text": "All done."}],
-                    },
-                },
-                "metadata": {},
-            },
-            id="with-message-text-ignored",
-        ),
-    ],
-)
-def test_completed_event_emits_only_finish_chunk(event: dict):
+def test_completed_event_with_no_message_emits_only_finish_chunk():
+    event = {"kind": "status-update", "status": {"state": "completed"}, "metadata": {}}
     chunks = list(event_to_chunks(event, "agent-one"))
     assert len(chunks) == 1
     assert chunks[0].choices[0].finish_reason == "stop"
-    # The artifact carries the answer; completed status-updates do not.
     assert not chunks[0].choices[0].delta.content
+
+
+def test_completed_event_emits_message_text_then_finish():
+    # Standard a2a-sdk agents (e.g. wfo-search) put the final answer in the completed
+    # status message; emit it, then signal stop. (kagent agents leave it empty.)
+    event = {
+        "kind": "status-update",
+        "status": {
+            "state": "completed",
+            "message": {"role": "assistant", "parts": [{"kind": "text", "text": "All done."}]},
+        },
+        "metadata": {},
+    }
+    chunks = list(event_to_chunks(event, "agent-one"))
+    assert [c.choices[0].delta.content for c in chunks if c.choices[0].delta.content] == ["All done."]
+    assert chunks[-1].choices[0].finish_reason == "stop"
 
 
 # ---------------------------------------------------------------------------
