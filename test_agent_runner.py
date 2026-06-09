@@ -133,16 +133,19 @@ async def test_reasoning_never_leads_with_whitespace() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_answer_fragments_pass_through_clean(stream_mode: None) -> None:
+async def test_answer_fragments_stream_to_thinking_pane(stream_mode: None) -> None:
+    # The live working stream goes to the Thinking pane and joins cleanly there;
+    # the main pane's answer arrives via the trailing artifact.
     content, reasoning = await _run(
         [
             working_event("Hello", partial=True),
             working_event(" world", partial=True),
+            artifact_event("Hello world"),
             COMPLETED,
         ]
     )
+    assert reasoning == "Hello world"
     assert content == "Hello world"
-    assert reasoning == ""
 
 
 async def test_realistic_stream_has_no_double_blank_lines(stream_mode: None) -> None:
@@ -152,10 +155,13 @@ async def test_realistic_stream_has_no_double_blank_lines(stream_mode: None) -> 
             tool_call_event("influxdb_query", args={"q": "x"}),
             working_event("Got results.", thought=True, partial=True),
             working_event("The answer is 42.", partial=True),
+            artifact_event("The answer is 42."),
             COMPLETED,
         ]
     )
+    # The answer streams live into Thinking and lands cleanly in the main pane.
     assert content == "The answer is 42."
+    assert "The answer is 42." in reasoning
     assert "\n\n\n" not in reasoning
     assert "\n\n\n" not in content
 
@@ -193,8 +199,15 @@ async def test_deemphasize_skips_token_partials(deemphasize_mode: None) -> None:
     assert "I'll start by" not in content.replace("> I'll start by querying ANA.", "")
 
 
-async def test_stream_mode_keeps_token_streaming(stream_mode: None) -> None:
-    content, _ = await _run(TRACE)
-    # Old behavior: partials stream verbatim, no blockquote de-emphasis.
-    assert "I'll start by querying ANA." in content
-    assert "> I'll start" not in content
+async def test_stream_mode_routes_live_stream_to_thinking(stream_mode: None) -> None:
+    content, reasoning = await _run(TRACE)
+    # The live working stream — narration, answer-in-progress, and tool calls —
+    # goes to the Thinking pane verbatim (no blockquote de-emphasis).
+    assert "I'll start by querying ANA." in reasoning
+    assert "Now I pull telemetry." in reasoning
+    assert "🔧 **ana_topology_agent**" in reasoning
+    assert "🔧 **telemetry_agent**" in reasoning
+    # The main pane shows only the final answer, delivered via the artifact;
+    # the noisy narration never lands there.
+    assert content == "I now have both sides.\n\n---\n\n# Report\n\nAll good."
+    assert "I'll start by querying ANA." not in content

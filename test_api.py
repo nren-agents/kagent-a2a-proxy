@@ -7,7 +7,8 @@ kagent events are wrapped in a JSON-RPC envelope and use the pre-v1.0
 partials, re-sent as a non-partial aggregate copy and as an artifact-update.
 Rendering depends on `narration_mode` (see config): the default `deemphasize`
 emits each burst from its aggregate (narration blockquoted, answer plain);
-`stream` token-streams the partials verbatim. Tests pin the mode they assert.
+`stream` token-streams the partials into the Thinking pane, with the answer
+reaching the main pane via the artifact. Tests pin the mode they assert.
 """
 
 import json
@@ -104,17 +105,18 @@ def test_non_streaming_completion():
 
 
 # ---------------------------------------------------------------------------
-# /v1/chat/completions — streaming: answer → content, no duplication
+# /v1/chat/completions — streaming: live stream → Thinking, answer → content
+# via the trailing artifact
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
-def test_streaming_answer_goes_to_content_without_duplication(stream_mode):
+def test_streaming_answer_streams_to_thinking_artifact_to_content(stream_mode):
     events = [
         working_event("Result ", partial=True),
         working_event("okandgo", partial=True),
         working_event("Result okandgo", partial=False),  # aggregate, skipped
-        artifact_event("Result okandgo"),  # duplicate, dropped
+        artifact_event("Result okandgo"),  # the main-pane answer
         completed_event(),
     ]
     respx.post(KAGENT_URL).mock(
@@ -139,11 +141,12 @@ def test_streaming_answer_goes_to_content_without_duplication(stream_mode):
 
     assert '"role":"assistant"' in body or '"role": "assistant"' in body
     assert "[DONE]" in body
-    # Answer streams as content deltas, once (aggregate + artifact deduped).
-    assert '"content":"okandgo"' in body
-    assert body.count("okandgo") == 1
-    # No populated reasoning channel for a pure answer (only null keys).
-    assert '"reasoning_content":"' not in body
+    # The live answer streams to the Thinking pane (aggregate copy skipped).
+    assert '"reasoning_content":"Result "' in body
+    assert '"reasoning_content":"okandgo"' in body
+    # The main-pane answer arrives once, via the artifact.
+    assert '"content":"Result okandgo"' in body
+    assert body.count('"content":"Result okandgo"') == 1
 
 
 @respx.mock
@@ -187,6 +190,7 @@ def test_streaming_tool_call_renders_in_reasoning(stream_mode):
         working_event("Looking up agents ", partial=True),
         tool_call_event("list_agents"),
         working_event("done.", partial=True),
+        artifact_event("done."),
         completed_event(),
     ]
     respx.post(KAGENT_URL).mock(
@@ -209,10 +213,13 @@ def test_streaming_tool_call_renders_in_reasoning(stream_mode):
         assert r.status_code == 200
         body = "".join(line for line in r.iter_lines() if line.startswith("data:"))
 
-    # Tool call shows in the Thinking pane; the prose stays in the reply.
+    # Tool call and the live prose both render in the Thinking pane; the
+    # main-pane answer arrives via the artifact.
     assert '"reasoning_content":"' in body
     assert "list_agents" in body
-    assert '"content":"Looking up agents "' in body
+    assert '"reasoning_content":"Looking up agents "' in body
+    assert '"content":"Looking up agents "' not in body
+    assert '"content":"done."' in body
 
 
 @respx.mock

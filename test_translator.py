@@ -52,7 +52,9 @@ def test_parse_sse_line(line: str, expected):
 
 
 # ---------------------------------------------------------------------------
-# event_to_chunks — working text routing (answer → content, thought → pane)
+# event_to_chunks — working text routing (stream mode: the live working stream,
+# prose and thought alike, goes to the Thinking pane; the answer reaches the
+# main pane via the trailing artifact-update)
 # ---------------------------------------------------------------------------
 
 
@@ -61,9 +63,9 @@ def test_parse_sse_line(line: str, expected):
     [
         pytest.param(
             working_event("Pong!", partial=True),
-            "content",
+            "reasoning",
             "Pong!",
-            id="answer-partial-to-content",
+            id="answer-partial-to-reasoning",
         ),
         pytest.param(
             working_event("Checking telemetry...", thought=True, partial=True),
@@ -73,9 +75,9 @@ def test_parse_sse_line(line: str, expected):
         ),
         pytest.param(
             working_event("answer with no partial flag"),
-            "content",
+            "reasoning",
             "answer with no partial flag",
-            id="answer-no-flag-to-content",
+            id="answer-no-flag-to-reasoning",
         ),
     ],
 )

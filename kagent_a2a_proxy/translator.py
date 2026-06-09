@@ -155,11 +155,14 @@ def _tool_call_chunks(
 def _working_stream(
     event: A2ATaskStatusUpdateEvent, model: str
 ) -> Iterator[ChatCompletionChunk]:
-    """Original behavior: token-stream every working text part into the reply.
+    """Token-stream the live working stream into the Thinking pane.
 
-    Thought fragments and tool calls go to the Thinking pane; the agent's prose
-    (narration and answer alike) streams verbatim into `content`. The non-partial
-    aggregate copy (is_partial() is False) is skipped to avoid duplication.
+    Thoughts, tool calls, and the agent's prose (narration and answer-in-progress
+    alike) all stream verbatim into `reasoning_content`. The visible `content`
+    answer arrives separately via the trailing artifact-update: because nothing
+    streams to `content` here, `agent_runner` keeps that artifact instead of
+    dropping it. The non-partial aggregate copy (is_partial() is False) is
+    skipped to avoid duplicating the partials in the pane.
     """
     message = event.status.message
     if event.is_tool_call():
@@ -169,12 +172,12 @@ def _working_stream(
         return
     if message is None or event.is_partial() is False:
         return
-    # Emit thought fragments verbatim: the model's own newlines carry the
-    # paragraph structure, and agent_runner normalizes the channel as a whole.
+    # Emit fragments verbatim: the model's own newlines carry the paragraph
+    # structure, and agent_runner normalizes the channel as a whole.
     if thought := message.thought_text():
         yield _thinking_chunk(thought, model)
     if answer := message.answer_text():
-        yield _text_chunk(answer, model)
+        yield _thinking_chunk(answer, model)
 
 
 def _working_deemphasize(
