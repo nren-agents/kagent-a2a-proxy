@@ -111,9 +111,19 @@ def event_to_chunks(
         return
 
     # ------------------------------------------------------------------
-    # Completed — signal stop; the answer arrived via working text.
+    # Completed — emit the final message text, then signal stop.
+    #
+    # Standard a2a-sdk agents (e.g. wfo-search) put their answer/summary in the
+    # completed status message. kagent agents instead carry the answer in an
+    # artifact-update and leave this message empty, so emitting it here is a
+    # no-op for them.
     # ------------------------------------------------------------------
     if state == "completed":
+        message = event.status.message
+        if message:
+            text = message.text()
+            if text:
+                yield _text_chunk(text, model)
         yield _finish_chunk(model)
         return
 

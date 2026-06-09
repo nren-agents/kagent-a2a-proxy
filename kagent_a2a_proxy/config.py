@@ -42,6 +42,16 @@ class Settings(BaseSettings):
             "present in agent_map. Must appear as a value in agent_map."
         ),
     )
+    agent_urls: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Optional JSON map of kagent agent name → direct A2A endpoint URL. "
+            "When an agent has an entry here, the proxy POSTs to that URL instead "
+            "of constructing the kagent-controller path. Used for local dev "
+            "against a BYO a2a-sdk agent that serves JSON-RPC at its root. "
+            "Set via PROXY_AGENT_URLS as a JSON string."
+        ),
+    )
     request_timeout: float = Field(
         default=300.0,
         gt=0,
