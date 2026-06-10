@@ -89,6 +89,38 @@ def _build_payload(messages: list[dict[str, Any]], session_id: str) -> dict[str,
     }
 
 
+def _build_continue_payload(
+    messages: list[dict[str, Any]], context_id: str
+) -> dict[str, Any]:
+    """Build a message/stream payload that continues an existing conversation.
+
+    Mirrors the resume payload's shape (the contextId rides the *message*, no
+    params.sessionId): per A2A, a message bearing a known ``contextId`` but no
+    ``taskId`` starts a new task within that conversation, so kagent rebuilds the
+    prior history from its server-side session store. ``messages`` is therefore
+    just the newest turn — not the whole replayed history.
+
+    The ``messageId`` must be unique (kagent's a2a-go server dedups on it).
+    """
+    parts = [
+        {"kind": "text", "text": _format_message(m)}
+        for m in messages
+        if m.get("content")
+    ]
+    message: dict[str, Any] = {
+        "messageId": str(uuid.uuid4()),
+        "role": "user",
+        "contextId": context_id,
+        "parts": parts,
+    }
+    return {
+        "jsonrpc": "2.0",
+        "method": "message/stream",
+        "id": str(uuid.uuid4()),
+        "params": {"message": message},
+    }
+
+
 def _build_decision_payload(
     task_id: str,
     context_id: str,
@@ -169,19 +201,30 @@ async def stream_agent(
     model: str,
     messages: list[dict[str, Any]],
     session_id: str | None = None,
+    context_id: str | None = None,
 ) -> AsyncIterator[str]:
     """
     Call kagent A2A message/stream and yield raw SSE lines.
+
+    With ``context_id`` set, continue an existing conversation (``messages`` is
+    just the newest turn, echoed under that contextId); otherwise start a fresh
+    session (``messages`` is the full replayed history under a new sessionId).
 
     Yields each line as a string (including the 'data: ' prefix).
     Caller is responsible for parsing.
     """
     agent_name = _resolve_agent(model)
     url = _a2a_url(agent_name)
-    sid = session_id or str(uuid.uuid4())
-    payload = _build_payload(messages, sid)
 
-    logger.info("Streaming agent=%s session=%s url=%s", agent_name, sid, url)
+    if context_id:
+        payload = _build_continue_payload(messages, context_id)
+        logger.info(
+            "Continuing agent=%s context=%s url=%s", agent_name, context_id, url
+        )
+    else:
+        sid = session_id or str(uuid.uuid4())
+        payload = _build_payload(messages, sid)
+        logger.info("Streaming agent=%s session=%s url=%s", agent_name, sid, url)
 
     async for line in _stream(url, payload):
         yield line

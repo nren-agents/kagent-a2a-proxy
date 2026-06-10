@@ -69,18 +69,30 @@ def encode_marker(
 ) -> str:
     """Return a signed, invisible (zero-width) marker, or '' when disabled.
 
-    Disabled (returns '') when no secret is configured or there's no task to
-    resume — callers then emit an informational-only prompt.
+    Two flavours ride the same envelope: a HITL marker (``task_id`` set, used to
+    resume a paused approval) and a session-continuity marker (``context_id``
+    only, used to carry the kagent conversation's contextId across turns). Each
+    key is included only when present.
+
+    Disabled (returns '') when no secret is configured or there's nothing to
+    carry (no task and no context) — callers then emit an informational-only
+    prompt or skip the marker.
 
     When ``questions`` is given (an ``ask_user`` prompt), the normalized
     question structure is embedded too, so the stateless next turn can map the
     user's reply (numbers / labels / free text) back to ``ask_user_answers``.
     """
-    if not secret or not task_id:
+    if not secret:
         return ""
-    body_obj: dict[str, Any] = {"t": task_id, "c": context_id}
+    body_obj: dict[str, Any] = {}
+    if task_id:
+        body_obj["t"] = task_id
+    if context_id:
+        body_obj["c"] = context_id
     if questions:
         body_obj["q"] = questions
+    if not body_obj:
+        return ""
     payload = (
         base64.urlsafe_b64encode(json.dumps(body_obj).encode()).decode().rstrip("=")
     )
@@ -88,21 +100,9 @@ def encode_marker(
     return _encode_zw(body)
 
 
-def extract_pending(
-    messages: list[dict[str, Any]], secret: str | None
-) -> dict[str, Any] | None:
-    """Recover the paused task from the latest assistant marker.
-
-    Returns ``{task_id, context_id}`` (plus ``questions`` for an ``ask_user``
-    prompt), or None when HITL is disabled, no assistant marker is present, or
-    the signature doesn't verify (tampered / forged).
-    """
-    if not secret:
-        return None
-    assistant = next(
-        (m for m in reversed(messages) if m.get("role") == "assistant"), None
-    )
-    content = assistant.get("content") if assistant else None
+def _verify_marker(content: Any, secret: str) -> dict[str, Any] | None:
+    """Decode + HMAC-verify a marker embedded in ``content``; None if absent,
+    malformed, or forged."""
     if not isinstance(content, str):
         return None
     version, _, rest = _decode_zw(content).partition(":")
@@ -111,7 +111,27 @@ def extract_pending(
     payload_b64, _, sig = rest.partition(":")
     if not sig or not hmac.compare_digest(sig, _sign(payload_b64, secret)):
         return None
-    data = _decode_payload(payload_b64)
+    return _decode_payload(payload_b64)
+
+
+def extract_pending(
+    messages: list[dict[str, Any]], secret: str | None
+) -> dict[str, Any] | None:
+    """Recover the paused task from the latest assistant marker.
+
+    Returns ``{task_id, context_id}`` (plus ``questions`` for an ``ask_user``
+    prompt), or None when HITL is disabled, the latest assistant marker carries
+    no task (a plain session-continuity marker), no assistant marker is present,
+    or the signature doesn't verify (tampered / forged).
+    """
+    if not secret:
+        return None
+    assistant = next(
+        (m for m in reversed(messages) if m.get("role") == "assistant"), None
+    )
+    data = _verify_marker(assistant.get("content") if assistant else None, secret)
+    if not data:
+        return None
     task_id = data.get("t")
     if not task_id:
         return None
@@ -123,6 +143,33 @@ def extract_pending(
     if isinstance(questions, list):
         pending["questions"] = questions
     return pending
+
+
+def extract_context(messages: list[dict[str, Any]], secret: str | None) -> str | None:
+    """Recover the kagent conversation's ``contextId`` from the most recent
+    assistant marker that carries one, scanning newest-first.
+
+    Used for session continuity: a follow-up turn echoes this contextId so
+    kagent resumes the same server-side session. Scanning back (rather than only
+    the latest turn) keeps the chain alive even if an intervening assistant turn
+    lacked a marker (e.g. an error reply). None when disabled or unverifiable.
+    """
+    if not secret:
+        return None
+    markers = (
+        _verify_marker(m.get("content"), secret)
+        for m in reversed(messages)
+        if m.get("role") == "assistant"
+    )
+    return next((str(d["c"]) for d in markers if d and d.get("c")), None)
+
+
+def strip_marker(text: str) -> str:
+    """Remove any embedded zero-width marker characters from ``text``.
+
+    For one-shot surfaces (MCP tool output) that never round-trip the marker, so
+    the invisible characters don't leak into the returned string."""
+    return text.replace(_BIT0, "").replace(_BIT1, "")
 
 
 def _decode_payload(payload_b64: str) -> dict[str, Any]:

@@ -123,6 +123,28 @@ async def test_tool_invocation_with_default_session_id_is_fresh_uuid():
     assert len(body["params"]["sessionId"]) == 36
 
 
+@respx.mock
+async def test_tool_result_strips_session_marker(monkeypatch):
+    # The translator embeds an invisible session-continuity marker on completed
+    # when a secret is set; MCP tool output is one-shot, so it must be stripped
+    # rather than leaking zero-width characters into the returned string.
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    events = [artifact_event("All systems nominal."), completed_event("ctx-mcp")]
+    respx.post(_kagent_url("agent-one")).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response(events),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    async with Client(mcp) as client:
+        result = await client.call_tool("agent_one", {"prompt": "status?"})
+
+    assert result.data == "All systems nominal."
+    assert "\u200b" not in result.data and "\u200c" not in result.data
+
+
 # ---------------------------------------------------------------------------
 # Error path
 # ---------------------------------------------------------------------------

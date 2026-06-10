@@ -66,9 +66,13 @@ class Settings(BaseSettings):
     hitl_secret: str | None = Field(
         default=None,
         description=(
-            "Secret for HMAC-signing the human-in-the-loop approval marker "
-            "embedded in assistant replies. When unset, tool-approval requests "
-            "are informational only (no stateful approve/deny resume)."
+            "Secret for HMAC-signing the invisible marker embedded in assistant "
+            "replies. Enables two stateless features: human-in-the-loop "
+            "approve/deny resume, and session continuity (the marker carries the "
+            "kagent conversation's contextId so follow-up turns resume the same "
+            "server-side session instead of starting a new chat). When unset, "
+            "tool-approval requests are informational only and every turn is a "
+            "fresh full-history replay."
         ),
     )
 

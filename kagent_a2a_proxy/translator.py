@@ -111,9 +111,13 @@ def event_to_chunks(
         return
 
     # ------------------------------------------------------------------
-    # Completed — signal stop; the answer arrived via working text.
+    # Completed — signal stop; the answer arrived via working text. Embed the
+    # session-continuity marker (if enabled) so the next turn can resume this
+    # kagent conversation by echoing its contextId.
     # ------------------------------------------------------------------
     if state == "completed":
+        if marker := _session_marker(event.contextId):
+            yield _text_chunk(marker, model)
         yield _finish_chunk(model)
         return
 
@@ -448,6 +452,12 @@ def _artifact_update_chunks(
     text = event.artifact.text()
     if text:
         yield _text_chunk(text, model)
+
+
+def _session_marker(context_id: str) -> str:
+    """The invisible session-continuity marker for a conversation's contextId
+    (empty when continuity is disabled or there's no contextId)."""
+    return encode_marker("", context_id, settings.hitl_secret)
 
 
 def _text_chunk(text: str, model: str) -> ChatCompletionChunk:

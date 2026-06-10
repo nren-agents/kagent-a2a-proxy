@@ -131,6 +131,19 @@ def _last_user_text(messages: list[dict[str, Any]]) -> str:
     )
 
 
+def _messages_after_last_assistant(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The newest turn: messages following the last assistant reply (usually the
+    single new user message). Prior turns live in kagent's session on a
+    continuation, so only this is sent."""
+    last = max(
+        (i for i, m in enumerate(messages) if m.get("role") == "assistant"),
+        default=-1,
+    )
+    return messages[last + 1 :]
+
+
 def _select_chunks(
     model: str,
     messages: list[dict[str, Any]],
@@ -138,9 +151,16 @@ def _select_chunks(
 ) -> AsyncIterator[ChatCompletionChunk]:
     """Pick the chunk source. With a pending HITL prompt, resume it: an ``ask_user``
     prompt maps the reply to positional answers; a tool approval keys off a clear
-    approve/deny. An unmappable reply re-prompts; no pending prompt is a fresh call."""
+    approve/deny. An unmappable reply re-prompts. Otherwise, if a prior assistant
+    marker carries a kagent contextId, continue that conversation (echo the
+    contextId, send only the newest turn); with no marker it's a fresh call."""
     pending = hitl.extract_pending(messages, settings.hitl_secret)
     if pending is None:
+        context_id = hitl.extract_context(messages, settings.hitl_secret)
+        if context_id is not None:
+            return translate_stream(
+                model, _messages_after_last_assistant(messages), context_id=context_id
+            )
         return translate_stream(model, messages, session_id)
     user_text = _last_user_text(messages)
     questions = pending.get("questions")

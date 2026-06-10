@@ -463,6 +463,113 @@ def test_ask_user_unparseable_reply_reprompts_without_calling_kagent(monkeypatch
 
 
 # ---------------------------------------------------------------------------
+# /v1/chat/completions — session continuity (echo contextId, send newest turn)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_fresh_turn_embeds_recoverable_context_marker(monkeypatch):
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response(
+                [artifact_event("Hello."), completed_event(context_id="ctx-abc")]
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": False,
+        },
+    )
+
+    content = r.json()["choices"][0]["message"]["content"]
+    assert "Hello." in content
+    # The reply carries an invisible marker the next turn can resume from.
+    assert (
+        hitl.extract_context([{"role": "assistant", "content": content}], "s3cr3t")
+        == "ctx-abc"
+    )
+
+
+@respx.mock
+def test_follow_up_continues_context_with_only_newest_turn(monkeypatch):
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    marker = hitl.encode_marker("", "ctx-abc", "s3cr3t")
+    route = respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response(
+                [artifact_event("Scaled to 3."), completed_event(context_id="ctx-abc")]
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [
+                {"role": "user", "content": "tell me about nginx"},
+                {"role": "assistant", "content": "nginx is a web server." + marker},
+                {"role": "user", "content": "now scale it to 3"},
+            ],
+            "stream": False,
+        },
+    )
+
+    assert r.status_code == 200
+    sent = json.loads(route.calls.last.request.content)
+    message = sent["params"]["message"]
+    # Continuation rides the recovered contextId, no fresh sessionId.
+    assert message["contextId"] == "ctx-abc"
+    assert "sessionId" not in sent["params"]
+    # Only the newest user turn is sent; prior turns live in kagent's session.
+    texts = [p["text"] for p in message["parts"]]
+    assert texts == ["now scale it to 3"]
+
+
+@respx.mock
+def test_no_secret_replays_full_history_as_fresh_turn(monkeypatch):
+    # Without a secret there's no marker, so every turn is a fresh full replay
+    # (the pre-existing stateless behavior).
+    monkeypatch.setattr(settings, "hitl_secret", None)
+    route = respx.post(KAGENT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_response([artifact_event("ok"), completed_event()]),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "agent-one",
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "reply"},
+                {"role": "user", "content": "second"},
+            ],
+            "stream": False,
+        },
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert "sessionId" in sent["params"]  # fresh session, not a continuation
+    texts = [p["text"] for p in sent["params"]["message"]["parts"]]
+    # Full history is replayed (assistant turn prefixed by _format_message).
+    assert "first" in texts and "second" in texts
+
+
+# ---------------------------------------------------------------------------
 # /v1/chat/completions — kagent 503 error
 # ---------------------------------------------------------------------------
 

@@ -120,12 +120,17 @@ def artifact_event(text: str) -> dict:
     }
 
 
-def completed_event() -> dict:
-    return {
+def completed_event(context_id: str = "") -> dict:
+    """A completed status-update. Real kagent events carry the conversation's
+    ``contextId``; pass one to exercise the session-continuity marker."""
+    event: dict = {
         "kind": "status-update",
         "status": {"state": "completed"},
         "metadata": {},
     }
+    if context_id:
+        event["contextId"] = context_id
+    return event
 
 
 def narration_aggregate(text: str, tool: str, args: dict | None = None) -> dict:

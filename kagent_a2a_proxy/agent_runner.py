@@ -18,6 +18,7 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
+from .hitl import strip_marker
 from .kagent_client import resume_stream, stream_agent
 from .models import ChatCompletionChunk
 from .translator import event_to_chunks, parse_sse_line
@@ -134,11 +135,16 @@ async def _translate_lines(
 async def translate_stream(
     model: str,
     messages: list[dict[str, Any]],
-    session_id: str,
+    session_id: str | None = None,
+    context_id: str | None = None,
 ) -> AsyncIterator[ChatCompletionChunk]:
-    """Stream a fresh kagent A2A call as de-duplicated OpenAI chunks."""
+    """Stream a kagent A2A call as de-duplicated OpenAI chunks.
+
+    With ``context_id`` set, continues an existing conversation (newest turn
+    only); otherwise starts a fresh session with the given ``session_id``.
+    """
     async for chunk in _translate_lines(
-        stream_agent(model, messages, session_id), model
+        stream_agent(model, messages, session_id, context_id), model
     ):
         yield chunk
 
@@ -186,7 +192,12 @@ async def collect_agent_response(
     session_id: str,
     on_progress: ProgressCallback | None = None,
 ) -> str:
-    """Drain a fresh kagent A2A call into the final content string."""
-    return await collect_response(
+    """Drain a fresh kagent A2A call into the final content string.
+
+    Strips the session-continuity marker: MCP tool output is one-shot and never
+    round-trips it, so the invisible characters must not leak into the result.
+    """
+    content = await collect_response(
         translate_stream(model, messages, session_id), on_progress
     )
+    return strip_marker(content)

@@ -69,6 +69,82 @@ def test_no_marker_returns_none():
     assert hitl.extract_pending(messages, SECRET) is None
 
 
+# ---------------------------------------------------------------------------
+# Session continuity — a context-only marker (no taskId) carries the kagent
+# conversation's contextId across turns so follow-ups resume the same session.
+# ---------------------------------------------------------------------------
+
+
+def test_context_only_marker_round_trips_via_extract_context():
+    marker = hitl.encode_marker("", "ctx-9", SECRET)
+    assert marker
+    assert all(ch in ("\u200b", "\u200c") for ch in marker)  # still invisible
+    messages = _messages(("user", "hi"), ("assistant", "the answer" + marker))
+    assert hitl.extract_context(messages, SECRET) == "ctx-9"
+
+
+def test_context_only_marker_is_not_a_pending_approval():
+    # No taskId → extract_pending must not treat it as a paused HITL task.
+    marker = hitl.encode_marker("", "ctx-9", SECRET)
+    assert hitl.extract_pending(_messages(("assistant", "x" + marker)), SECRET) is None
+
+
+def test_encode_marker_empty_when_nothing_to_carry():
+    assert hitl.encode_marker("", "", SECRET) == ""
+
+
+def test_extract_context_returns_latest_assistant_marker():
+    old = hitl.encode_marker("", "ctx-old", SECRET)
+    new = hitl.encode_marker("", "ctx-new", SECRET)
+    messages = _messages(
+        ("assistant", "first" + old),
+        ("user", "more"),
+        ("assistant", "second" + new),
+    )
+    assert hitl.extract_context(messages, SECRET) == "ctx-new"
+
+
+def test_extract_context_scans_back_past_unmarked_assistant():
+    # A later assistant turn without a marker (e.g. an error) must not break the
+    # chain — we fall back to the most recent valid marker.
+    marker = hitl.encode_marker("", "ctx-1", SECRET)
+    messages = _messages(
+        ("assistant", "earlier" + marker),
+        ("user", "x"),
+        ("assistant", "no marker here"),
+    )
+    assert hitl.extract_context(messages, SECRET) == "ctx-1"
+
+
+def test_extract_context_also_reads_an_approval_marker():
+    # A HITL approval marker carries the contextId too, so continuity survives
+    # a turn that paused for approval.
+    marker = hitl.encode_marker("task-1", "ctx-hitl", SECRET)
+    messages = _messages(("assistant", "Approval required" + marker))
+    assert hitl.extract_context(messages, SECRET) == "ctx-hitl"
+
+
+def test_extract_context_disabled_without_secret():
+    marker = hitl.encode_marker("", "ctx-1", SECRET)
+    assert hitl.extract_context(_messages(("assistant", "a" + marker)), None) is None
+
+
+def test_extract_context_rejects_wrong_secret():
+    marker = hitl.encode_marker("", "ctx-1", SECRET)
+    messages = _messages(("assistant", "a" + marker))
+    assert hitl.extract_context(messages, "different-secret") is None
+
+
+def test_extract_context_none_when_no_marker():
+    assert hitl.extract_context(_messages(("assistant", "plain reply")), SECRET) is None
+
+
+def test_strip_marker_removes_zero_width_chars():
+    marker = hitl.encode_marker("", "ctx-1", SECRET)
+    assert hitl.strip_marker("Answer." + marker) == "Answer."
+    assert hitl.strip_marker("no marker") == "no marker"
+
+
 @pytest.mark.parametrize(
     "text,expected",
     [

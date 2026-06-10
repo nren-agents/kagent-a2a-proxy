@@ -531,6 +531,43 @@ def test_completed_event_emits_only_finish_chunk(event: dict):
     assert not chunks[0].choices[0].delta.content
 
 
+def test_completed_emits_no_session_marker_without_secret():
+    # With no HITL/marker secret configured, completed stays a single finish
+    # chunk — continuity is opt-in via PROXY_HITL_SECRET.
+    event = {
+        "kind": "status-update",
+        "contextId": "ctx-1",
+        "status": {"state": "completed"},
+        "metadata": {},
+    }
+    chunks = list(event_to_chunks(event, "agent-one"))
+    assert len(chunks) == 1
+    assert chunks[0].choices[0].finish_reason == "stop"
+
+
+def test_completed_embeds_session_marker_when_secret_set(monkeypatch):
+    from kagent_a2a_proxy import hitl
+    from kagent_a2a_proxy.config import settings
+
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    event = {
+        "kind": "status-update",
+        "contextId": "ctx-77",
+        "status": {"state": "completed"},
+        "metadata": {},
+    }
+    chunks = list(event_to_chunks(event, "agent-one"))
+    # An invisible context marker rides a content delta *before* the finish chunk
+    # (clients that stop at finish_reason would otherwise drop it).
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    marker = "".join(c.choices[0].delta.content or "" for c in chunks)
+    assert marker  # non-empty, invisible
+    assert (
+        hitl.extract_context([{"role": "assistant", "content": marker}], "s3cr3t")
+        == "ctx-77"
+    )
+
+
 # ---------------------------------------------------------------------------
 # event_to_chunks — artifact-update carries the actual answer text
 # ---------------------------------------------------------------------------
