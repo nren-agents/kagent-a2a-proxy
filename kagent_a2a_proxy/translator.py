@@ -37,8 +37,10 @@ def parse_sse_line(line: str) -> dict[str, Any] | None:
       {"jsonrpc":"2.0","id":"...","result":{...event...}}
       {"jsonrpc":"2.0","id":"...","error":{"code":...,"message":...}}
 
-    We return just the event payload (the `result` field), or None for
-    non-event lines, parse failures, and JSON-RPC errors.
+    We return just the event payload (the `result` field) or, for a JSON-RPC
+    error, a synthetic ``{"kind": "error", "error": ...}`` event so the error
+    surfaces downstream as a visible notice instead of ending the stream
+    silently. Returns None for non-event lines and parse failures.
     """
     if not line.startswith("data:"):
         return None
@@ -56,7 +58,7 @@ def parse_sse_line(line: str) -> dict[str, Any] | None:
             return result
         case {"error": error}:
             logger.warning("kagent JSON-RPC error: %s", error)
-            return None
+            return {"kind": "error", "error": error}
         case _:
             return parsed  # type: ignore[no-any-return]  # json.loads returns Any
 
@@ -75,6 +77,12 @@ def event_to_chunks(
     match raw.get("kind"):
         case "artifact-update":
             yield from _artifact_update_chunks(raw, model)
+            return
+        case "error":
+            # Synthetic event from a JSON-RPC error (parse_sse_line). Surface a
+            # visible notice + stop, otherwise the stream just ends silently.
+            yield _text_chunk(_error_notice(raw.get("error")), model)
+            yield _finish_chunk(model)
             return
         case "status-update" | None:
             # `None` for backward compat with events lacking the discriminator
@@ -245,6 +253,13 @@ def _terminal_notice(state: str, message: A2AMessage | None) -> str:
             label = "⚠️ Agent request was rejected"
     suffix = f": {detail}" if detail else ""
     return f"\n{label}{suffix}\n"
+
+
+def _error_notice(error: Any) -> str:
+    """Visible one-line notice for a mid-stream kagent JSON-RPC error."""
+    message = str(error.get("message", "")).strip() if isinstance(error, dict) else ""
+    suffix = f": {message}" if message else ""
+    return f"\n⚠️ Agent stream error{suffix}\n"
 
 
 def _input_required_text(event: A2ATaskStatusUpdateEvent) -> str:

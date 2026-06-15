@@ -211,3 +211,47 @@ async def test_stream_mode_routes_live_stream_to_thinking(stream_mode: None) -> 
     # the noisy narration never lands there.
     assert content == "I now have both sides.\n\n---\n\n# Report\n\nAll good."
     assert "I'll start by querying ANA." not in content
+
+
+# ---------------------------------------------------------------------------
+# _translate_lines — a mid-stream JSON-RPC error surfaces end-to-end, instead of
+# the stream ending silently (the symptom behind the "context deadline exceeded"
+# warning)
+# ---------------------------------------------------------------------------
+
+
+async def test_midstream_jsonrpc_error_surfaces_notice_and_finish(
+    deemphasize_mode: None,
+) -> None:
+    async def lines() -> AsyncIterator[str]:
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "0",
+                    "result": working_event("Partial answer.", partial=False),
+                }
+            )
+        )
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "1",
+                    "error": {
+                        "code": -32603,
+                        "message": "SSE stream error: context deadline exceeded",
+                    },
+                }
+            )
+        )
+
+    chunks = [c async for c in _translate_lines(lines(), "agent-one")]
+    content = "".join(c.choices[0].delta.content or "" for c in chunks)
+    assert "Partial answer." in content
+    assert (
+        "⚠️ Agent stream error: SSE stream error: context deadline exceeded" in content
+    )
+    assert chunks[-1].choices[0].finish_reason == "stop"

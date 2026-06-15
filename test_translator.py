@@ -42,7 +42,7 @@ from kagent_a2a_proxy.translator import event_to_chunks, parse_sse_line
         pytest.param("", None, id="empty-line"),
         pytest.param(
             'data: {"jsonrpc":"2.0","id":"x","error":{"code":-1,"message":"nope"}}',
-            None,
+            {"kind": "error", "error": {"code": -1, "message": "nope"}},
             id="jsonrpc-error",
         ),
     ],
@@ -625,6 +625,34 @@ def test_terminal_state_surfaces_notice_and_finish(
     assert expected in chunks[0].choices[0].delta.content
     if detail:
         assert detail in chunks[0].choices[0].delta.content
+    assert chunks[1].choices[0].finish_reason == "stop"
+
+
+# ---------------------------------------------------------------------------
+# event_to_chunks — a mid-stream JSON-RPC error surfaces a notice + finish,
+# instead of ending the stream silently
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "error,expected_detail",
+    [
+        pytest.param(
+            {"code": -32603, "message": "context deadline exceeded"},
+            "context deadline exceeded",
+            id="with-message",
+        ),
+        pytest.param({"code": -32603}, None, id="no-message"),
+    ],
+)
+def test_jsonrpc_error_surfaces_notice_and_finish(error, expected_detail):
+    event = {"kind": "error", "error": error}
+    chunks = list(event_to_chunks(event, "agent-one"))
+    assert len(chunks) == 2
+    notice = chunks[0].choices[0].delta.content
+    assert "⚠️" in notice
+    if expected_detail:
+        assert expected_detail in notice
     assert chunks[1].choices[0].finish_reason == "stop"
 
 
