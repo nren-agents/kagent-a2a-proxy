@@ -406,6 +406,11 @@ def test_approval_embeds_signed_marker_when_secret_set(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def _question(text: str, choices: list[str], *, multiple: bool) -> dict:
+    """One normalized ask_user question."""
+    return {"question": text, "choices": choices, "multiple": multiple}
+
+
 def _ask_user_event(questions: list[dict]) -> dict:
     """An input-required event whose confirmation wraps an ask_user call."""
     return {
@@ -465,17 +470,10 @@ def test_ask_user_multiselect_hint_and_marker(monkeypatch):
     from kagent_a2a_proxy.config import settings
 
     monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    # One scenario: a single prompt batching two questions (not a case table).
     questions = [
-        {
-            "question": "Which database?",
-            "choices": ["PostgreSQL", "MySQL"],
-            "multiple": False,
-        },
-        {
-            "question": "Which features?",
-            "choices": ["Auth", "Logging", "Caching"],
-            "multiple": True,
-        },
+        _question("Which database?", ["PostgreSQL", "MySQL"], multiple=False),
+        _question("Which features?", ["Auth", "Logging", "Caching"], multiple=True),
     ]
     content = (
         next(iter(event_to_chunks(_ask_user_event(questions), "agent-one")))
@@ -654,6 +652,43 @@ def test_jsonrpc_error_surfaces_notice_and_finish(error, expected_detail):
     if expected_detail:
         assert expected_detail in notice
     assert chunks[1].choices[0].finish_reason == "stop"
+
+
+# ---------------------------------------------------------------------------
+# event_to_chunks — errored turns carry a continuity tombstone: the kagent
+# session may be left with a dangling tool call (Anthropic rejects the rebuilt
+# history), so the next turn must start fresh instead of reopening that context.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(
+            {"kind": "status-update", "status": {"state": "failed"}, "metadata": {}},
+            id="failed",
+        ),
+        pytest.param(
+            {"kind": "error", "error": {"code": -32603, "message": "deadline"}},
+            id="jsonrpc-error",
+        ),
+    ],
+)
+def test_errored_turn_carries_continuity_tombstone(monkeypatch, event: dict):
+    from kagent_a2a_proxy import hitl
+    from kagent_a2a_proxy.config import settings
+
+    monkeypatch.setattr(settings, "hitl_secret", "s3cr3t")
+    chunks = list(event_to_chunks(event, "agent-one"))
+    notice = "".join(c.choices[0].delta.content or "" for c in chunks)
+    earlier = hitl.encode_marker("", "ctx-1", "s3cr3t")
+    # History: a good turn with a context marker, then the errored turn — the
+    # tombstone on the notice must stop the scan from reaching the old marker.
+    history = [
+        {"role": "assistant", "content": content}
+        for content in ("fine answer" + earlier, notice)
+    ]
+    assert hitl.extract_context(history, "s3cr3t") is None
 
 
 # ---------------------------------------------------------------------------

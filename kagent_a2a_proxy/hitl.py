@@ -93,6 +93,22 @@ def encode_marker(
         body_obj["q"] = questions
     if not body_obj:
         return ""
+    return _encode_body(body_obj, secret)
+
+
+def encode_tombstone(secret: str | None) -> str:
+    """A signed marker that *breaks* session continuity ('' when disabled).
+
+    Embedded in terminal-failure / stream-error notices: the kagent session may
+    be left with a dangling tool call (its LLM rejects the rebuilt history), so
+    ``extract_context`` must stop at this turn and let the next request start a
+    fresh session instead of reopening the poisoned context."""
+    if not secret:
+        return ""
+    return _encode_body({"x": 1}, secret)
+
+
+def _encode_body(body_obj: dict[str, Any], secret: str) -> str:
     payload = (
         base64.urlsafe_b64encode(json.dumps(body_obj).encode()).decode().rstrip("=")
     )
@@ -152,7 +168,10 @@ def extract_context(messages: list[dict[str, Any]], secret: str | None) -> str |
     Used for session continuity: a follow-up turn echoes this contextId so
     kagent resumes the same server-side session. Scanning back (rather than only
     the latest turn) keeps the chain alive even if an intervening assistant turn
-    lacked a marker (e.g. an error reply). None when disabled or unverifiable.
+    lacked a marker (e.g. a pre-tombstone error reply). The newest *decisive*
+    marker wins: a tombstone (an errored turn whose kagent session may be
+    poisoned) stops the scan, so the next turn starts fresh. None when disabled,
+    unverifiable, or tombstoned.
     """
     if not secret:
         return None
@@ -161,7 +180,10 @@ def extract_context(messages: list[dict[str, Any]], secret: str | None) -> str |
         for m in reversed(messages)
         if m.get("role") == "assistant"
     )
-    return next((str(d["c"]) for d in markers if d and d.get("c")), None)
+    decisive = next((d for d in markers if d and (d.get("c") or d.get("x"))), None)
+    if decisive is None or decisive.get("x"):
+        return None
+    return str(decisive["c"])
 
 
 def strip_marker(text: str) -> str:

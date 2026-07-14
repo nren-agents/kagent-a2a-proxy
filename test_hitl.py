@@ -139,6 +139,44 @@ def test_extract_context_none_when_no_marker():
     assert hitl.extract_context(_messages(("assistant", "plain reply")), SECRET) is None
 
 
+def test_tombstone_stops_context_scan():
+    # After a terminal failure the kagent session may hold a dangling tool call;
+    # the tombstone on the error turn must stop the scan so the next turn starts
+    # fresh instead of reopening the poisoned context.
+    tombstone = hitl.encode_tombstone(SECRET)
+    assert tombstone  # non-empty
+    assert all(ch in ("\u200b", "\u200c") for ch in tombstone)  # invisible
+    marker = hitl.encode_marker("", "ctx-1", SECRET)
+    messages = _messages(
+        ("assistant", "fine answer" + marker),
+        ("user", "do the risky thing"),
+        ("assistant", "⚠️ Agent run failed" + tombstone),
+    )
+    assert hitl.extract_context(messages, SECRET) is None
+
+
+def test_newer_context_marker_overrides_older_tombstone():
+    # A completed turn after the failure re-establishes continuity.
+    tombstone = hitl.encode_tombstone(SECRET)
+    marker = hitl.encode_marker("", "ctx-2", SECRET)
+    messages = _messages(
+        ("assistant", "⚠️ Agent run failed" + tombstone),
+        ("user", "try again"),
+        ("assistant", "worked this time" + marker),
+    )
+    assert hitl.extract_context(messages, SECRET) == "ctx-2"
+
+
+def test_tombstone_is_not_a_pending_approval():
+    tombstone = hitl.encode_tombstone(SECRET)
+    messages = _messages(("assistant", "⚠️ Agent run failed" + tombstone))
+    assert hitl.extract_pending(messages, SECRET) is None
+
+
+def test_encode_tombstone_empty_without_secret():
+    assert hitl.encode_tombstone(None) == ""
+
+
 def test_strip_marker_removes_zero_width_chars():
     marker = hitl.encode_marker("", "ctx-1", SECRET)
     assert hitl.strip_marker("Answer." + marker) == "Answer."

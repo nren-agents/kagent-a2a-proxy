@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from .config import settings
-from .hitl import encode_marker
+from .hitl import encode_marker, encode_tombstone
 from .models import (
     A2ADataPart,
     A2AMessage,
@@ -81,7 +81,13 @@ def event_to_chunks(
         case "error":
             # Synthetic event from a JSON-RPC error (parse_sse_line). Surface a
             # visible notice + stop, otherwise the stream just ends silently.
-            yield _text_chunk(_error_notice(raw.get("error")), model)
+            # The tombstone breaks session continuity: the aborted run may have
+            # left a dangling tool call in the kagent session.
+            yield _text_chunk(
+                _error_notice(raw.get("error"))
+                + encode_tombstone(settings.hitl_secret),
+                model,
+            )
             yield _finish_chunk(model)
             return
         case "status-update" | None:
@@ -114,7 +120,13 @@ def event_to_chunks(
     # otherwise the stream just ends silently with no answer.
     # ------------------------------------------------------------------
     if state in ("failed", "canceled", "rejected", "auth-required"):
-        yield _text_chunk(_terminal_notice(state, event.status.message), model)
+        # Tombstone: the task died (possibly mid-tool-call), so the session may
+        # be poisoned — the next turn must not reopen this context.
+        yield _text_chunk(
+            _terminal_notice(state, event.status.message)
+            + encode_tombstone(settings.hitl_secret),
+            model,
+        )
         yield _finish_chunk(model)
         return
 
