@@ -11,9 +11,12 @@ emits each burst from its aggregate (narration blockquoted, answer plain);
 reaching the main pane via the artifact. Tests pin the mode they assert.
 """
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
 
 import httpx
+import pytest
 import respx
 from fastapi.testclient import TestClient
 
@@ -29,7 +32,7 @@ from conftest import (
 )
 from kagent_a2a_proxy import hitl
 from kagent_a2a_proxy.config import settings
-from kagent_a2a_proxy.main import app
+from kagent_a2a_proxy.main import _with_heartbeat, app
 
 client = TestClient(app)
 
@@ -629,3 +632,36 @@ def test_streaming_disables_read_timeout():
     assert timeout["connect"] == settings.request_timeout
     assert timeout["write"] == settings.request_timeout
     assert timeout["pool"] == settings.request_timeout
+
+
+# ---------------------------------------------------------------------------
+# SSE heartbeat — comment lines fill idle gaps so intermediary idle-read
+# timeouts (undici bodyTimeout, LB idle timers) don't sever quiet streams.
+# ---------------------------------------------------------------------------
+
+
+async def _gapped_parts(gap: float) -> AsyncIterator[str]:
+    yield "data: a\n\n"
+    await asyncio.sleep(gap)
+    yield "data: b\n\n"
+
+
+async def test_heartbeat_fills_idle_gap():
+    out = [p async for p in _with_heartbeat(_gapped_parts(gap=0.1), interval=0.02)]
+    assert ": ping\n\n" in out
+    # Data parts survive, in order, with pings only in the gap between them.
+    assert [p for p in out if p != ": ping\n\n"] == ["data: a\n\n", "data: b\n\n"]
+    assert out[0] == "data: a\n\n"
+    assert out[-1] == "data: b\n\n"
+
+
+@pytest.mark.parametrize(
+    "interval,gap",
+    [
+        pytest.param(5.0, 0.0, id="fast-stream"),
+        pytest.param(0.0, 0.05, id="disabled"),
+    ],
+)
+async def test_no_heartbeat_when_fast_or_disabled(interval: float, gap: float):
+    out = [p async for p in _with_heartbeat(_gapped_parts(gap), interval)]
+    assert out == ["data: a\n\n", "data: b\n\n"]

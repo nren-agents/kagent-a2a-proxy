@@ -63,6 +63,19 @@ class Settings(BaseSettings):
             "original behavior)."
         ),
     )
+    sse_heartbeat_interval: float = Field(
+        default=20.0,
+        ge=0,
+        description=(
+            "Seconds of idle on a streaming response before an SSE comment "
+            "heartbeat (': ping') is emitted. Agent streams can be silent for "
+            "minutes (long tool runs; deemphasize mode suppresses partials), "
+            "and idle-read timeouts along the client path — LibreChat's Node "
+            "fetch kills a body idle for ~300s, load balancers often sooner — "
+            "sever the stream ('terminated'). Comments are ignored by SSE "
+            "parsers and reset every such timer. 0 disables."
+        ),
+    )
     hitl_secret: str | None = Field(
         default=None,
         description=(

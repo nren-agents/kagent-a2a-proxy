@@ -10,6 +10,7 @@ Exposes:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -107,7 +108,9 @@ async def chat_completions(request: Request) -> StreamingResponse | JSONResponse
 
     if req.stream:
         return StreamingResponse(
-            _stream_response(req.model, chunks),
+            _with_heartbeat(
+                _stream_response(req.model, chunks), settings.sse_heartbeat_interval
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -224,6 +227,43 @@ def _clarify_ask_user_chunks(
     )
     note = "\n⚠️ I couldn't match your reply to the question(s). Please try again:\n"
     return _stop_chunks(model, note + render_ask_user(questions, marker))
+
+
+_SSE_HEARTBEAT = ": ping\n\n"
+
+
+async def _with_heartbeat(
+    parts: AsyncIterator[str],
+    interval: float,
+) -> AsyncIterator[str]:
+    """Yield ``parts``, inserting an SSE comment during idle gaps.
+
+    Agent streams can be silent for minutes (long tool runs; deemphasize mode
+    suppresses partials), and idle-read timeouts on the client path (LibreChat's
+    undici bodyTimeout ~300s, LB idle timers) sever quiet streams. SSE comment
+    lines are spec-ignored by parsers and reset every such timer.
+
+    The pending ``anext`` is kept alive across heartbeats (never cancelled on
+    the timeout path) so no part is ever lost mid-await.
+    """
+    if not interval:
+        async for part in parts:
+            yield part
+        return
+    it = aiter(parts)
+    upcoming = asyncio.ensure_future(anext(it, None))
+    try:
+        while True:
+            done, _ = await asyncio.wait({upcoming}, timeout=interval)
+            if not done:
+                yield _SSE_HEARTBEAT
+            elif (item := upcoming.result()) is None:
+                return
+            else:
+                yield item
+                upcoming = asyncio.ensure_future(anext(it, None))
+    finally:
+        upcoming.cancel()
 
 
 async def _stream_response(
